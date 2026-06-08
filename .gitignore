@@ -1,0 +1,17 @@
+# Dependency directories
+fitness-pwa/node_modules/
+
+# Build outputs
+fitness-pwa/dist/
+
+# Logs and PID files
+*.log
+fitness-pwa/server.log
+fitness-pwa/.server.pid
+.server.pid
+
+# OS generated files
+.DS_Store
+.DS_Store?
+ehthumbs.db
+Thumbs.db
