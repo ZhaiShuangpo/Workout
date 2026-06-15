@@ -443,7 +443,26 @@ export function WorkoutPage() {
           <div style={{ fontSize: '14px', marginBottom: '8px', opacity: 0.8 }}>重量 (kg)</div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <button onClick={() => setWeight(w => Math.max(0, w - 2.5))} style={btnStyle}><Minus size={20}/></button>
-            <span style={{ fontSize: '24px', fontWeight: 'bold' }}>{weight}</span>
+            <input
+              type="number"
+              step="any"
+              value={weight === 0 ? '' : weight}
+              onChange={(e) => {
+                const val = e.target.value;
+                setWeight(val === '' ? 0 : parseFloat(val));
+              }}
+              style={{
+                fontSize: '24px',
+                fontWeight: 'bold',
+                width: '70px',
+                textAlign: 'center',
+                border: 'none',
+                background: 'transparent',
+                color: 'var(--text-color)',
+                outline: 'none',
+                padding: 0
+              }}
+            />
             <button onClick={() => setWeight(w => w + 2.5)} style={btnStyle}><Plus size={20}/></button>
           </div>
         </div>
@@ -453,7 +472,25 @@ export function WorkoutPage() {
           <div style={{ fontSize: '14px', marginBottom: '8px', opacity: 0.8 }}>次数 (reps)</div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <button onClick={() => setReps(r => Math.max(0, r - 1))} style={btnStyle}><Minus size={20}/></button>
-            <span style={{ fontSize: '24px', fontWeight: 'bold' }}>{reps}</span>
+            <input
+              type="number"
+              value={reps === 0 ? '' : reps}
+              onChange={(e) => {
+                const val = e.target.value;
+                setReps(val === '' ? 0 : parseInt(val, 10));
+              }}
+              style={{
+                fontSize: '24px',
+                fontWeight: 'bold',
+                width: '70px',
+                textAlign: 'center',
+                border: 'none',
+                background: 'transparent',
+                color: 'var(--text-color)',
+                outline: 'none',
+                padding: 0
+              }}
+            />
             <button onClick={() => setReps(r => r + 1)} style={btnStyle}><Plus size={20}/></button>
           </div>
         </div>
