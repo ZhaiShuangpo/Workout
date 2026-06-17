@@ -442,7 +442,7 @@ export function WorkoutPage() {
         <div style={{ flex: 1, backgroundColor: 'var(--surface-color)', padding: '16px 8px', borderRadius: '12px', textAlign: 'center' }}>
           <div style={{ fontSize: '14px', marginBottom: '8px', opacity: 0.8 }}>重量 (kg)</div>
           <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '4px' }}>
-            <button onClick={() => setWeight(w => Math.max(0, w - 2.5))} style={btnStyle}><Minus size={18}/></button>
+            <button onClick={() => setWeight(w => Math.max(0, w - 2.5))} style={btnStyle}><Minus size={16}/></button>
             <input
               type="number"
               step="any"
@@ -452,10 +452,9 @@ export function WorkoutPage() {
                 setWeight(val === '' ? 0 : parseFloat(val));
               }}
               style={{
-                fontSize: '22px',
+                fontSize: '20px',
                 fontWeight: 'bold',
-                flex: 1,
-                minWidth: 0,
+                width: '60px',
                 textAlign: 'center',
                 border: 'none',
                 background: 'transparent',
@@ -464,7 +463,7 @@ export function WorkoutPage() {
                 padding: 0
               }}
             />
-            <button onClick={() => setWeight(w => w + 2.5)} style={btnStyle}><Plus size={18}/></button>
+            <button onClick={() => setWeight(w => w + 2.5)} style={btnStyle}><Plus size={16}/></button>
           </div>
         </div>
 
@@ -472,7 +471,7 @@ export function WorkoutPage() {
         <div style={{ flex: 1, backgroundColor: 'var(--surface-color)', padding: '16px 8px', borderRadius: '12px', textAlign: 'center' }}>
           <div style={{ fontSize: '14px', marginBottom: '8px', opacity: 0.8 }}>次数 (reps)</div>
           <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '4px' }}>
-            <button onClick={() => setReps(r => Math.max(0, r - 1))} style={btnStyle}><Minus size={18}/></button>
+            <button onClick={() => setReps(r => Math.max(0, r - 1))} style={btnStyle}><Minus size={16}/></button>
             <input
               type="number"
               value={reps === 0 ? '' : reps}
@@ -481,10 +480,9 @@ export function WorkoutPage() {
                 setReps(val === '' ? 0 : parseInt(val, 10));
               }}
               style={{
-                fontSize: '22px',
+                fontSize: '20px',
                 fontWeight: 'bold',
-                flex: 1,
-                minWidth: 0,
+                width: '60px',
                 textAlign: 'center',
                 border: 'none',
                 background: 'transparent',
@@ -493,7 +491,7 @@ export function WorkoutPage() {
                 padding: 0
               }}
             />
-            <button onClick={() => setReps(r => r + 1)} style={btnStyle}><Plus size={18}/></button>
+            <button onClick={() => setReps(r => r + 1)} style={btnStyle}><Plus size={16}/></button>
           </div>
         </div>
       </div>
@@ -649,7 +647,7 @@ export function WorkoutPage() {
 }
 
 const btnStyle = {
-  width: '36px', height: '36px', borderRadius: '50%',
+  width: '32px', height: '32px', borderRadius: '50%',
   border: 'none', backgroundColor: 'var(--border-color)',
   display: 'flex', justifyContent: 'center', alignItems: 'center',
   cursor: 'pointer', color: 'var(--text-color)',
