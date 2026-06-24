@@ -21,6 +21,7 @@ export function NutritionPage() {
   const [weight, setWeight] = useState<number>(() => getInitialState('weight', 70));
   const [activity, setActivity] = useState<number>(() => getInitialState('activity', 1.2));
   const [goal, setGoal] = useState<'cut' | 'maintain' | 'bulk'>(() => getInitialState('goal', 'maintain'));
+  const [selectedTab, setSelectedTab] = useState<'home' | 'takeout' | 'minimal'>('home');
 
   // Mifflin-St Jeor Equation
   let bmr = (10 * weight) + (6.25 * height) - (5 * age);
@@ -53,6 +54,157 @@ export function NutritionPage() {
       gender, age, height, weight, activity, goal
     }));
   }, [gender, age, height, weight, activity, goal]);
+
+  const renderMealsPlan = () => {
+    // 换算手掌/拳头/碗等单位
+    const proteinPortions = Math.max(3, Math.round(protein / 20));
+    const carbPortions = Math.max(3, Math.round(carbs / 30));
+    const fatPortions = Math.max(2, Math.round(fat / 10));
+
+    // 动态分餐比例：早餐 25%, 午餐 40%, 晚餐 35%
+    const pB = Math.max(1, Math.round(proteinPortions * 0.25));
+    const pL = Math.max(1, Math.round(proteinPortions * 0.4));
+    const pD = Math.max(1, proteinPortions - pB - pL);
+
+    const cB = Math.max(1, Math.round(carbPortions * 0.25));
+    const cL = Math.max(1, Math.round(carbPortions * 0.4));
+    const cD = Math.max(1, carbPortions - cB - cL);
+
+    const fB = Math.max(1, Math.round(fatPortions * 0.2));
+    const fL = Math.max(1, Math.round(fatPortions * 0.4));
+    const fD = Math.max(1, fatPortions - fB - fL);
+
+    const mealStyle = {
+      display: 'flex',
+      flexDirection: 'column' as const,
+      gap: '8px',
+      borderBottom: '1px solid var(--border-color)',
+      paddingBottom: '16px'
+    };
+
+    const mealHeaderStyle = {
+      display: 'flex',
+      alignItems: 'center',
+      gap: '8px',
+      fontWeight: 'bold',
+      fontSize: '15px'
+    };
+
+    const badgeStyle = (bgColor: string) => ({
+      padding: '2px 8px',
+      borderRadius: '4px',
+      color: '#fff',
+      fontSize: '11px',
+      backgroundColor: bgColor
+    });
+
+    interface MealPlanItem {
+      title: string;
+      badgeColor: string;
+      staple: string;
+      protein: string;
+      vegetable?: string;
+      fat?: string;
+    }
+
+    const targetList: MealPlanItem[] = {
+      home: [
+        {
+          title: '早餐 (元气开启)',
+          badgeColor: '#10b981',
+          staple: `拳头大小的蒸红薯/蒸紫薯 ${cB} 个 (或全麦面包 ${cB} 片/生燕麦 ${Math.round(cB * 40)}g)`,
+          protein: `水煮蛋/煎蛋 ${pB} 个 (或配无糖豆浆/牛奶 ${Math.round(pB * 200)}ml)`,
+          vegetable: `生菜、小黄瓜 1 捧 (补充膳食纤维，清爽去腻)`,
+          fat: `烹饪用油控制在 ${fB} 拇指量以内`
+        },
+        {
+          title: '中餐 (能量续航)',
+          badgeColor: '#3b82f6',
+          staple: `普通饭碗熟米饭 ${cL} 碗 (优先推荐杂粮饭/糙米饭)`,
+          protein: `手掌心大小的炒肉类/鱼肉 ${pL} 个 (如尖椒炒肉/番茄炒蛋/黑椒牛肉)`,
+          vegetable: `清炒时蔬、西兰花等 ${Math.max(2, cL)} 捧 (少油清炒，水焯更佳)`,
+          fat: `烹饪用油控制在 ${fL} 拇指量以内`
+        },
+        {
+          title: '晚餐 (轻负担修复)',
+          badgeColor: '#8b5cf6',
+          staple: `熟米饭 ${cD} 碗 (或蒸土豆/紫薯 ${cD} 个/水煮玉米 ${cD} 根)`,
+          protein: `手掌心大小的清蒸鱼/虾肉/去皮鸡肉 ${pD} 个 (或豆腐/滑蛋等)`,
+          vegetable: `少油蔬菜、菌菇类 2 捧`,
+          fat: `烹饪用油控制在 ${fD} 拇指量以内 (尽量少油)`
+        }
+      ],
+      takeout: [
+        {
+          title: '早餐 (便利店优选)',
+          badgeColor: '#10b981',
+          staple: `中等包子/烧麦 ${cB} 个 (或全麦三明治 1 份)`,
+          protein: `茶叶蛋 ${pB} 个 + 无糖豆浆/脱脂牛奶 1 杯`,
+          vegetable: `小番茄/圣女果 1 盒`
+        },
+        {
+          title: '中餐 (快餐自选/盖饭)',
+          badgeColor: '#3b82f6',
+          staple: `盖饭/自选餐主食米饭 ${cL} 碗 (叮嘱商家少浇汤汁)`,
+          protein: `手掌大的肉类主菜 ${pL} 份 (如小炒鸡/牛肉，吃前可用清水涮去表面油分)`,
+          vegetable: `白灼生菜/菜心 1-2 份`
+        },
+        {
+          title: '晚餐 (轻食/面点)',
+          badgeColor: '#8b5cf6',
+          staple: `牛肉面/汤粉中的主食 ${cD} 碗 (少喝汤，避免盐分超标)`,
+          protein: `酱牛肉/去皮鸡腿/煎豆腐 ${pD} 份 (或点一份沙拉选择鸡胸/虾仁配低卡醋汁)`,
+          vegetable: `沙拉菜/面里配菜 2 捧`
+        }
+      ],
+      minimal: [
+        {
+          title: '早餐 (快手燕麦)',
+          badgeColor: '#10b981',
+          staple: `燕麦片 ${Math.round(cB * 40)}g (温水/牛奶冲泡)`,
+          protein: `水煮蛋/荷包蛋 ${pB} 个`
+        },
+        {
+          title: '中餐 (快手简餐)',
+          badgeColor: '#3b82f6',
+          staple: `水煮红薯/紫薯 ${cL} 个 (或即食玉米 ${cL} 根)`,
+          protein: `即食无油鸡胸肉/水浸吞拿鱼罐头 ${pL} 块 (约 ${Math.round(pL * 100)}g)`,
+          vegetable: `水焯西兰花/生菜 ${Math.max(2, cL)} 捧 (无需调料或仅加极少低钠酱油)`
+        },
+        {
+          title: '晚餐 (蒸煮减负)',
+          badgeColor: '#8b5cf6',
+          staple: `水煮土豆/南瓜 ${cD} 个`,
+          protein: `无油香煎豆腐/水煮虾仁/去皮鸡腿肉 ${pD} 个`,
+          vegetable: `凉拌黄瓜/生吃大西红柿 2 捧`
+        }
+      ]
+    }[selectedTab];
+
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+        {targetList.map((meal, index) => (
+          <div key={index} style={index === targetList.length - 1 ? { ...mealStyle, borderBottom: 'none', paddingBottom: 0 } : mealStyle}>
+            <div style={mealHeaderStyle}>
+              <span style={badgeStyle(meal.badgeColor)}>{meal.title.split(' ')[0]}</span>
+              <span style={{ fontSize: '14px', opacity: 0.9 }}>{meal.title.split(' ')[1]}</span>
+            </div>
+            <div style={{ fontSize: '13px', opacity: 0.85, display: 'flex', flexDirection: 'column', gap: '6px', paddingLeft: '8px', borderLeft: `2px solid ${meal.badgeColor}` }}>
+              <div>🍚 <b>主食(碳水)：</b>{meal.staple}</div>
+              <div>🥩 <b>主菜(蛋白)：</b>{meal.protein}</div>
+              {meal.vegetable && <div>🥦 <b>配菜(蔬菜)：</b>{meal.vegetable}</div>}
+              {meal.fat && <div>🥑 <b>油脂控制：</b>{meal.fat}</div>}
+            </div>
+          </div>
+        ))}
+        
+        {/* 温馨提示 */}
+        <div style={{ fontSize: '12px', opacity: 0.6, marginTop: '8px', borderTop: '1px dashed var(--border-color)', paddingTop: '12px' }}>
+          💡 <b>提示：</b>以上方案已根据您当前的<b>“{goal === 'cut' ? '减脂' : goal === 'bulk' ? '增肌' : '保持'}”</b>目标及体重比例进行自适应份数调整。家常菜烹饪时通常自带隐性油脂，油脂控制份数供参考，不必刻意物外多加。
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div style={{ padding: '20px' }}>
@@ -181,45 +333,82 @@ export function NutritionPage() {
         </div>
       </div>
 
-      {/* 食物等量参考 */}
-      <div style={{ marginTop: '24px' }}>
+      {/* 饮食方案推荐 */}
+      <div style={{ marginTop: '28px' }}>
         <h3 style={{ margin: '0 0 16px 0', fontSize: '18px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <Utensils size={18} color="var(--primary-color)" /> 食物等量参考 (小白指南)
+          <Utensils size={18} color="var(--primary-color)" /> 实用的手掌/拳头量化膳食方案
         </h3>
         <p style={{ fontSize: '13px', opacity: 0.7, marginBottom: '16px', lineHeight: 1.5 }}>
-          不知道吃什么？以下是满足您单日营养目标的粗略食材重量（生重/未烹饪），您可以将它们自由组合分配到三餐中：
+          无需精准厨房秤！我们将您的每日营养目标折算为可视化的<b>“手掌/拳头/碗”</b>量纲，并为您提供三套极具操作性的饮食方案。
         </p>
 
-        {/* 蛋白质参考 */}
-        <div style={{ backgroundColor: 'var(--surface-color)', padding: '16px', borderRadius: '12px', border: '1px solid var(--border-color)', marginBottom: '12px' }}>
-          <div style={{ fontWeight: 'bold', color: '#34d399', marginBottom: '8px' }}>🥩 补充 {macros.protein}g 蛋白质，相当于：</div>
-          <ul style={{ margin: 0, paddingLeft: '20px', fontSize: '14px', opacity: 0.8, lineHeight: 1.6 }}>
-            <li>吃 <strong>{Math.round(macros.protein / 6)}</strong> 个全蛋 (约6g/个)</li>
-            <li>吃 <strong>{Math.round((macros.protein / 23) * 100)}g</strong> 鸡胸肉 (约23g/100g)</li>
-            <li>吃 <strong>{Math.round((macros.protein / 20) * 100)}g</strong> 瘦牛肉 (约20g/100g)</li>
-            <li>吃 <strong>{Math.round((macros.protein / 18) * 100)}g</strong> 鱼虾海鲜 (约18g/100g)</li>
-          </ul>
+        {/* 量纲图例指南 */}
+        <div style={{
+          backgroundColor: 'var(--surface-color)',
+          padding: '12px 16px',
+          borderRadius: '12px',
+          border: '1px dashed var(--border-color)',
+          marginBottom: '20px',
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+          gap: '12px',
+          fontSize: '12px',
+          opacity: 0.85
+        }}>
+          <div>✊ <b>1个拳头主食</b> ≈ 1碗熟米饭 / 1个中等红薯 / 1个玉米 (约30g碳水)</div>
+          <div>✋ <b>1个手掌蛋白</b> ≈ 1块手掌大小肉类 / 3个鸡蛋 / 200g豆腐 (约20g蛋白)</div>
+          <div>👍 <b>1个拇指油脂</b> ≈ 1汤匙植物油 / 10粒坚果 (约10g脂肪)</div>
+          <div>👐 <b>1大捧蔬菜</b> ≈ 1大把绿叶蔬菜 / 1根黄瓜 / 1个大西红柿 (膳食纤维，低热量)</div>
         </div>
 
-        {/* 碳水参考 */}
-        <div style={{ backgroundColor: 'var(--surface-color)', padding: '16px', borderRadius: '12px', border: '1px solid var(--border-color)', marginBottom: '12px' }}>
-          <div style={{ fontWeight: 'bold', color: '#fcd34d', marginBottom: '8px' }}>🍚 补充 {macros.carbs}g 碳水，相当于：</div>
-          <ul style={{ margin: 0, paddingLeft: '20px', fontSize: '14px', opacity: 0.8, lineHeight: 1.6 }}>
-            <li>吃 <strong>{Math.round((macros.carbs / 26) * 100)}g</strong> 熟米饭 (约26g/100g)</li>
-            <li>吃 <strong>{Math.round((macros.carbs / 17) * 100)}g</strong> 蒸红薯/紫薯 (约17g/100g)</li>
-            <li>吃 <strong>{Math.round((macros.carbs / 60) * 100)}g</strong> 生燕麦片 (约60g/100g)</li>
-          </ul>
+        {/* 方案 Tab 切换 */}
+        <div style={{ display: 'flex', gap: '6px', marginBottom: '16px', backgroundColor: 'var(--surface-color)', padding: '4px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+          <button
+            onClick={() => setSelectedTab('home')}
+            style={{
+              flex: 1, padding: '8px', borderRadius: '6px', border: 'none',
+              backgroundColor: selectedTab === 'home' ? 'var(--primary-color)' : 'transparent',
+              color: selectedTab === 'home' ? '#fff' : 'var(--text-color)',
+              fontWeight: 'bold', fontSize: '13px', cursor: 'pointer', transition: 'all 0.2s'
+            }}
+          >
+            🏠 家常小炒
+          </button>
+          <button
+            onClick={() => setSelectedTab('takeout')}
+            style={{
+              flex: 1, padding: '8px', borderRadius: '6px', border: 'none',
+              backgroundColor: selectedTab === 'takeout' ? 'var(--primary-color)' : 'transparent',
+              color: selectedTab === 'takeout' ? '#fff' : 'var(--text-color)',
+              fontWeight: 'bold', fontSize: '13px', cursor: 'pointer', transition: 'all 0.2s'
+            }}
+          >
+            🛵 外卖指南
+          </button>
+          <button
+            onClick={() => setSelectedTab('minimal')}
+            style={{
+              flex: 1, padding: '8px', borderRadius: '6px', border: 'none',
+              backgroundColor: selectedTab === 'minimal' ? 'var(--primary-color)' : 'transparent',
+              color: selectedTab === 'minimal' ? '#fff' : 'var(--text-color)',
+              fontWeight: 'bold', fontSize: '13px', cursor: 'pointer', transition: 'all 0.2s'
+            }}
+          >
+            🥑 极简自制
+          </button>
         </div>
 
-        {/* 脂肪参考 */}
-        <div style={{ backgroundColor: 'var(--surface-color)', padding: '16px', borderRadius: '12px', border: '1px solid var(--border-color)', marginBottom: '12px' }}>
-          <div style={{ fontWeight: 'bold', color: '#f87171', marginBottom: '8px' }}>🥑 补充 {macros.fat}g 脂肪，相当于：</div>
-          <ul style={{ margin: 0, paddingLeft: '20px', fontSize: '14px', opacity: 0.8, lineHeight: 1.6 }}>
-            <li>吃 <strong>{Math.round((macros.fat / 50) * 100)}g</strong> 坚果/杏仁 (约50g/100g)</li>
-            <li>吃 <strong>{Math.round((macros.fat / 15) * 100)}g</strong> 牛油果 (约15g/100g)</li>
-            <li>使用 <strong>{macros.fat}g</strong> 食用油/橄榄油 (约100g/100g)</li>
-          </ul>
-          <div style={{ fontSize: '12px', opacity: 0.6, marginTop: '8px' }}>*注：肉类和烹饪过程自带大量隐形脂肪，通常不需要刻意大量吃脂肪。</div>
+        {/* 方案内容展示 */}
+        <div style={{
+          backgroundColor: 'var(--surface-color)',
+          padding: '20px',
+          borderRadius: '16px',
+          border: '1px solid var(--border-color)',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '16px'
+        }}>
+          {renderMealsPlan()}
         </div>
       </div>
 
