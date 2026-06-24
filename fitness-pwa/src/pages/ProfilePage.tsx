@@ -12,9 +12,11 @@ function SessionCard({ session, sets, templates, exercises, bodyWeight }: { sess
     ? templates?.find(t => t.id === session.templateId)?.name || '未知计划'
     : '自由训练';
   
-  // 获取相关组数计算该次训练的总容量
+  // 获取相关组数计算该次训练的总容量（排除有氧运动）
   const sessionSets = sets?.filter(s => s.sessionId === session.id) || [];
   const totalVolume = sessionSets.reduce((total, set) => {
+    const exercise = exercises?.find(e => e.id === set.exerciseId);
+    if (exercise?.type === 'cardio') return total;
     const w = set.weight > 0 ? set.weight : bodyWeight;
     return total + (w * set.reps);
   }, 0);
@@ -88,15 +90,26 @@ function SessionCard({ session, sets, templates, exercises, bodyWeight }: { sess
       {isExpanded && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '8px' }}>
           {Object.entries(groupedSets).map(([exId, setsArray]) => {
-            const exName = exercises.find(e => e.id === Number(exId))?.name || '未知动作';
+            const exercise = exercises.find(e => e.id === Number(exId));
+            const exName = exercise?.name || '未知动作';
+            const isCardio = exercise?.type === 'cardio';
             return (
               <div key={exId} style={{ backgroundColor: 'var(--bg-color)', padding: '12px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
                 <div style={{ fontWeight: 'bold', fontSize: '14px', marginBottom: '8px', color: 'var(--primary-color)' }}>{exName}</div>
                 {setsArray.map((set, idx) => (
                   <div key={set.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', opacity: 0.8, padding: '4px 0', borderBottom: idx === setsArray.length - 1 ? 'none' : '1px solid var(--border-color)' }}>
                     <span>第 {idx + 1} 组</span>
-                    <span>{set.weight > 0 ? `${set.weight} kg` : '自重'}</span>
-                    <span>{set.reps} 次{set.rpe ? ` @ RPE ${set.rpe}` : ''}</span>
+                    {isCardio ? (
+                      <>
+                        <span>{set.duration || 0} 分钟</span>
+                        <span>{set.distance || 0} km{set.rpe ? ` @ RPE ${set.rpe}` : ''}</span>
+                      </>
+                    ) : (
+                      <>
+                        <span>{set.weight > 0 ? `${set.weight} kg` : '自重'}</span>
+                        <span>{set.reps} 次{set.rpe ? ` @ RPE ${set.rpe}` : ''}</span>
+                      </>
+                    )}
                   </div>
                 ))}
               </div>
@@ -256,28 +269,32 @@ export function ProfilePage() {
 
 
 
-  // Derived state: filter exercises that have completed sets
+  // Derived state: filter exercises that have completed sets, excluding cardio
   const exercisesWithData = useMemo(() => {
     if (!exercises || !sets) return [];
     const exerciseIdsWithSets = new Set(sets.map(s => s.exerciseId));
-    return exercises.filter(e => exerciseIdsWithSets.has(e.id!));
+    return exercises.filter(e => exerciseIdsWithSets.has(e.id!) && e.type !== 'cardio');
   }, [exercises, sets]);
 
-  const defaultExerciseId = useMemo(() => {
+  const displayedExercises = useMemo(() => {
     const list = exercisesWithData.length > 0 ? exercisesWithData : (exercises || []);
-    if (list.length === 0) return 0;
+    return list.filter(e => e.type !== 'cardio');
+  }, [exercisesWithData, exercises]);
+
+  const defaultExerciseId = useMemo(() => {
+    if (displayedExercises.length === 0) return 0;
     
     const coreLifts = ["杠铃平板卧推", "杠铃深蹲 (高杠)", "硬拉 (传统)", "杠铃深蹲", "杠铃卧推", "硬拉"];
     for (const liftName of coreLifts) {
-      const found = list.find(e => e.name === liftName);
+      const found = displayedExercises.find(e => e.name === liftName);
       if (found) return found.id!;
     }
-    return list[0].id!;
-  }, [exercises, exercisesWithData]);
+    return displayedExercises[0].id!;
+  }, [displayedExercises]);
 
   const activeExerciseId = selectedExerciseId || defaultExerciseId;
 
-  // 1. 计算每个 Session 的总容量 (Volume) 和图表数据
+  // 1. 计算每个 Session 的总容量 (Volume) 和图表数据（排除有氧运动）
   const chartData = useMemo(() => {
     if (!sessions || !sets) return [];
 
@@ -290,6 +307,8 @@ export function ProfilePage() {
       
       // 计算总容量 Volume = sum(weight * reps)
       const volume = sessionSets.reduce((total, set) => {
+        const exercise = exercises?.find(e => e.id === set.exerciseId);
+        if (exercise?.type === 'cardio') return total;
         const weight = set.weight > 0 ? set.weight : bodyWeight; // 如果是徒手(0kg)算作自重
         return total + (weight * set.reps);
       }, 0);
@@ -304,7 +323,7 @@ export function ProfilePage() {
         session: session
       };
     });
-  }, [sessions, sets, bodyWeight]);
+  }, [sessions, sets, bodyWeight, exercises]);
 
   // Calculate 1RM history for the selected exercise
   const oneRepMaxData = useMemo(() => {
@@ -377,7 +396,6 @@ export function ProfilePage() {
     );
   };
 
-  const displayedExercises = exercisesWithData.length > 0 ? exercisesWithData : (exercises || []);
   const selectedExObj = exercises?.find(e => e.id === activeExerciseId);
 
   return (

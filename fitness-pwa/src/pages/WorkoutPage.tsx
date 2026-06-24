@@ -18,6 +18,8 @@ export function WorkoutPage() {
   const [isDoingSet, setIsDoingSet] = useState<boolean>(() => localStorage.getItem('workout_isDoingSet') === 'true');
   const [selectedRestTime, setSelectedRestTime] = useState<number>(() => Number(localStorage.getItem('workout_selectedRestTime')) || 90);
   const [rpe, setRpe] = useState<number>(() => Number(localStorage.getItem('workout_rpe')) || 8);
+  const [duration, setDuration] = useState<number>(() => Number(localStorage.getItem('workout_duration')) || 20); // 默认20分钟
+  const [distance, setDistance] = useState<number>(() => Number(localStorage.getItem('workout_distance')) || 2.0); // 默认2.0km
 
   // 状态持久化
   useEffect(() => {
@@ -41,6 +43,12 @@ export function WorkoutPage() {
   useEffect(() => {
     localStorage.setItem('workout_rpe', String(rpe));
   }, [rpe]);
+  useEffect(() => {
+    localStorage.setItem('workout_duration', String(duration));
+  }, [duration]);
+  useEffect(() => {
+    localStorage.setItem('workout_distance', String(distance));
+  }, [distance]);
 
   const isResting = restEndTime !== null;
 
@@ -170,12 +178,17 @@ export function WorkoutPage() {
     const exSets = currentSets?.filter(s => s.exerciseId === selectedExId) || [];
     const setNumber = exSets.length + 1;
 
+    const currentEx = allExercises.find(e => e.id === selectedExId);
+    const isCardio = currentEx?.type === 'cardio';
+
     await db.workoutSets.add({
       sessionId: activeSession.id,
       exerciseId: selectedExId,
       setNumber,
-      weight,
-      reps,
+      weight: isCardio ? 0 : weight,
+      reps: isCardio ? 0 : reps,
+      duration: isCardio ? duration : undefined,
+      distance: isCardio ? distance : undefined,
       rpe,
       completed: true
     });
@@ -203,6 +216,9 @@ export function WorkoutPage() {
     ? allExercises.filter(ex => sessionTemplate.exerciseIds.includes(ex.id!))
     : allExercises;
 
+  const currentEx = allExercises.find(e => e.id === selectedExId);
+  const isCardio = currentEx?.type === 'cardio';
+
   // 自动选中第一个动作
   useEffect(() => {
     if (sessionExercises.length > 0 && !sessionExercises.find(e => e.id === selectedExId)) {
@@ -218,6 +234,45 @@ export function WorkoutPage() {
     if (!lastExerciseSets || lastExerciseSets.sets.length === 0) return null;
     
     const { sessionDate, sets: pastSets } = lastExerciseSets;
+    const currentEx = allExercises.find(e => e.id === selectedExId);
+    const isCardio = currentEx?.type === 'cardio';
+
+    if (isCardio) {
+      let bestSet = pastSets[0];
+      for (const s of pastSets) {
+        if ((s.duration || 0) > (bestSet.duration || 0)) {
+          bestSet = s;
+        }
+      }
+
+      const dateStr = new Date(sessionDate).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' });
+      const nextDuration = (bestSet.duration || 20) + 1;
+      const nextDistance = parseFloat(((bestSet.distance || 2.0) + 0.2).toFixed(1));
+
+      return (
+        <div style={{
+          backgroundColor: 'var(--surface-color)',
+          padding: '12px 16px',
+          borderRadius: '12px',
+          border: '1px dashed var(--primary-color)',
+          marginBottom: '20px',
+          fontSize: '13px',
+          lineHeight: 1.5
+        }}>
+          <div style={{ fontWeight: 'bold', color: 'var(--primary-color)', display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
+            <span>📈 渐进性超负荷建议</span>
+          </div>
+          <div style={{ opacity: 0.8 }}>
+            上次成绩 ({dateStr}): <strong style={{ color: 'var(--text-color)' }}>{bestSet.duration} 分钟 | {bestSet.distance || 0} km</strong>
+            {bestSet.rpe ? ` @ RPE ${bestSet.rpe}` : ''}。
+          </div>
+          <div style={{ marginTop: '6px', color: 'var(--success-color)', fontWeight: '500' }}>
+            今日目标推荐：尝试 <span style={{ textDecoration: 'underline' }}>{nextDuration} 分钟</span> 或 <span style={{ textDecoration: 'underline' }}>{nextDistance} km</span>！
+          </div>
+        </div>
+      );
+    }
+
     let bestSet = pastSets[0];
     for (const s of pastSets) {
       if (s.weight > bestSet.weight || (s.weight === bestSet.weight && s.reps > bestSet.reps)) {
@@ -260,6 +315,9 @@ export function WorkoutPage() {
 
     if (exSets.length === 0) return null;
 
+    const currentEx = allExercises.find(e => e.id === selectedExId);
+    const isCardio = currentEx?.type === 'cardio';
+
     const handleDeleteSet = async (setId: number) => {
       if (confirm('确定删除这一组记录吗？')) {
         await db.workoutSets.delete(setId);
@@ -278,9 +336,18 @@ export function WorkoutPage() {
               fontSize: '14px'
             }}>
               <span style={{ opacity: 0.6, width: '40px' }}>组 {idx + 1}</span>
-              <span style={{ fontWeight: 'bold' }}>{set.weight} kg</span>
-              <span style={{ fontWeight: 'bold' }}>{set.reps} 次</span>
-              <span style={{ opacity: 0.7, fontSize: '13px' }}>
+              {isCardio ? (
+                <>
+                  <span style={{ fontWeight: 'bold', width: '70px', textAlign: 'center' }}>{set.duration} 分钟</span>
+                  <span style={{ fontWeight: 'bold', width: '70px', textAlign: 'center' }}>{set.distance || 0} km</span>
+                </>
+              ) : (
+                <>
+                  <span style={{ fontWeight: 'bold', width: '70px', textAlign: 'center' }}>{set.weight} kg</span>
+                  <span style={{ fontWeight: 'bold', width: '70px', textAlign: 'center' }}>{set.reps} 次</span>
+                </>
+              )}
+              <span style={{ opacity: 0.7, fontSize: '13px', width: '60px', textAlign: 'center' }}>
                 {set.rpe ? `@ RPE ${set.rpe}` : ''}
               </span>
               <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
@@ -438,62 +505,125 @@ export function WorkoutPage() {
 
       {/* 极简大按钮录入区域 */}
       <div style={{ display: 'flex', gap: '12px', marginBottom: '24px' }}>
-        {/* 重量 */}
-        <div style={{ flex: 1, backgroundColor: 'var(--surface-color)', padding: '16px 8px', borderRadius: '12px', textAlign: 'center' }}>
-          <div style={{ fontSize: '14px', marginBottom: '8px', opacity: 0.8 }}>重量 (kg)</div>
-          <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '4px' }}>
-            <button onClick={() => setWeight(w => Math.max(0, w - 2.5))} style={btnStyle}><Minus size={16}/></button>
-            <input
-              type="number"
-              step="any"
-              value={weight === 0 ? '' : weight}
-              onChange={(e) => {
-                const val = e.target.value;
-                setWeight(val === '' ? 0 : parseFloat(val));
-              }}
-              style={{
-                fontSize: '20px',
-                fontWeight: 'bold',
-                width: '60px',
-                textAlign: 'center',
-                border: 'none',
-                background: 'transparent',
-                color: 'var(--text-color)',
-                outline: 'none',
-                padding: 0
-              }}
-            />
-            <button onClick={() => setWeight(w => w + 2.5)} style={btnStyle}><Plus size={16}/></button>
-          </div>
-        </div>
+        {isCardio ? (
+          <>
+            {/* 时间 (分钟) */}
+            <div style={{ flex: 1, backgroundColor: 'var(--surface-color)', padding: '16px 8px', borderRadius: '12px', textAlign: 'center' }}>
+              <div style={{ fontSize: '14px', marginBottom: '8px', opacity: 0.8 }}>时间 (分钟)</div>
+              <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '4px' }}>
+                <button onClick={() => setDuration(d => Math.max(1, d - 1))} style={btnStyle}><Minus size={16}/></button>
+                <input
+                  type="number"
+                  value={duration === 0 ? '' : duration}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setDuration(val === '' ? 0 : parseInt(val, 10));
+                  }}
+                  style={{
+                    fontSize: '20px',
+                    fontWeight: 'bold',
+                    width: '60px',
+                    textAlign: 'center',
+                    border: 'none',
+                    background: 'transparent',
+                    color: 'var(--text-color)',
+                    outline: 'none',
+                    padding: 0
+                  }}
+                />
+                <button onClick={() => setDuration(d => d + 1)} style={btnStyle}><Plus size={16}/></button>
+              </div>
+            </div>
 
-        {/* 次数 */}
-        <div style={{ flex: 1, backgroundColor: 'var(--surface-color)', padding: '16px 8px', borderRadius: '12px', textAlign: 'center' }}>
-          <div style={{ fontSize: '14px', marginBottom: '8px', opacity: 0.8 }}>次数 (reps)</div>
-          <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '4px' }}>
-            <button onClick={() => setReps(r => Math.max(0, r - 1))} style={btnStyle}><Minus size={16}/></button>
-            <input
-              type="number"
-              value={reps === 0 ? '' : reps}
-              onChange={(e) => {
-                const val = e.target.value;
-                setReps(val === '' ? 0 : parseInt(val, 10));
-              }}
-              style={{
-                fontSize: '20px',
-                fontWeight: 'bold',
-                width: '60px',
-                textAlign: 'center',
-                border: 'none',
-                background: 'transparent',
-                color: 'var(--text-color)',
-                outline: 'none',
-                padding: 0
-              }}
-            />
-            <button onClick={() => setReps(r => r + 1)} style={btnStyle}><Plus size={16}/></button>
-          </div>
-        </div>
+            {/* 距离 (km) */}
+            <div style={{ flex: 1, backgroundColor: 'var(--surface-color)', padding: '16px 8px', borderRadius: '12px', textAlign: 'center' }}>
+              <div style={{ fontSize: '14px', marginBottom: '8px', opacity: 0.8 }}>距离 (km)</div>
+              <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '4px' }}>
+                <button onClick={() => setDistance(d => Math.max(0, parseFloat((d - 0.1).toFixed(1))))} style={btnStyle}><Minus size={16}/></button>
+                <input
+                  type="number"
+                  step="0.1"
+                  value={distance === 0 ? '' : distance}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setDistance(val === '' ? 0 : parseFloat(val));
+                  }}
+                  style={{
+                    fontSize: '20px',
+                    fontWeight: 'bold',
+                    width: '60px',
+                    textAlign: 'center',
+                    border: 'none',
+                    background: 'transparent',
+                    color: 'var(--text-color)',
+                    outline: 'none',
+                    padding: 0
+                  }}
+                />
+                <button onClick={() => setDistance(d => parseFloat((d + 0.1).toFixed(1)))} style={btnStyle}><Plus size={16}/></button>
+              </div>
+            </div>
+          </>
+        ) : (
+          <>
+            {/* 重量 */}
+            <div style={{ flex: 1, backgroundColor: 'var(--surface-color)', padding: '16px 8px', borderRadius: '12px', textAlign: 'center' }}>
+              <div style={{ fontSize: '14px', marginBottom: '8px', opacity: 0.8 }}>重量 (kg)</div>
+              <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '4px' }}>
+                <button onClick={() => setWeight(w => Math.max(0, w - 2.5))} style={btnStyle}><Minus size={16}/></button>
+                <input
+                  type="number"
+                  step="any"
+                  value={weight === 0 ? '' : weight}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setWeight(val === '' ? 0 : parseFloat(val));
+                  }}
+                  style={{
+                    fontSize: '20px',
+                    fontWeight: 'bold',
+                    width: '60px',
+                    textAlign: 'center',
+                    border: 'none',
+                    background: 'transparent',
+                    color: 'var(--text-color)',
+                    outline: 'none',
+                    padding: 0
+                  }}
+                />
+                <button onClick={() => setWeight(w => w + 2.5)} style={btnStyle}><Plus size={16}/></button>
+              </div>
+            </div>
+
+            {/* 次数 */}
+            <div style={{ flex: 1, backgroundColor: 'var(--surface-color)', padding: '16px 8px', borderRadius: '12px', textAlign: 'center' }}>
+              <div style={{ fontSize: '14px', marginBottom: '8px', opacity: 0.8 }}>次数 (reps)</div>
+              <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '4px' }}>
+                <button onClick={() => setReps(r => Math.max(0, r - 1))} style={btnStyle}><Minus size={16}/></button>
+                <input
+                  type="number"
+                  value={reps === 0 ? '' : reps}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setReps(val === '' ? 0 : parseInt(val, 10));
+                  }}
+                  style={{
+                    fontSize: '20px',
+                    fontWeight: 'bold',
+                    width: '60px',
+                    textAlign: 'center',
+                    border: 'none',
+                    background: 'transparent',
+                    color: 'var(--text-color)',
+                    outline: 'none',
+                    padding: 0
+                  }}
+                />
+                <button onClick={() => setReps(r => r + 1)} style={btnStyle}><Plus size={16}/></button>
+              </div>
+            </div>
+          </>
+        )}
       </div>
 
       {/* 状态控制按钮 */}

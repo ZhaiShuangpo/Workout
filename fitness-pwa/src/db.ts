@@ -5,6 +5,7 @@ export interface Exercise {
   name: string;
   muscleGroup: string;
   description: string;
+  type?: 'strength' | 'cardio'; // 默认为 strength
 }
 
 export interface WorkoutTemplate {
@@ -30,6 +31,8 @@ export interface WorkoutSet {
   reps: number;
   rpe?: number;
   completed: boolean;
+  duration?: number; // 持续时间 (分钟)
+  distance?: number; // 距离 (km)
 }
 
 export interface BodyMetric {
@@ -63,7 +66,7 @@ export class FitnessDB extends Dexie {
 export const db = new FitnessDB();
 
 export async function initDB() {
-  const defaultExercises = [
+  const defaultExercises: Exercise[] = [
       // 胸部 (Chest)
       { name: '杠铃平板卧推', muscleGroup: '胸部', description: '肩胛骨收紧，将杠铃推起至手臂伸直。' },
       { name: '哑铃平板卧推', muscleGroup: '胸部', description: '相比杠铃能提供更大的运动幅度。' },
@@ -119,7 +122,16 @@ export async function initDB() {
       { name: '杠铃卧推', muscleGroup: '胸部', description: '肩胛骨收紧，将杠铃推起至手臂伸直。' },
       { name: '硬拉', muscleGroup: '背部/腿部', description: '核心收紧，利用臀腿力量拉起杠铃。' },
       { name: '哑铃推举', muscleGroup: '肩部', description: '核心收紧，将哑铃向上推举。' },
-      { name: '哑铃二头弯举', muscleGroup: '手臂', description: '大臂夹紧，只用小臂弯举哑铃。' }
+      { name: '哑铃二头弯举', muscleGroup: '手臂', description: '大臂夹紧，只用小臂弯举哑铃。' },
+
+      // 有氧心肺 (Cardio)
+      { name: '跑步机跑步', muscleGroup: '有氧心肺', description: '在跑步机上进行定速或变速跑步。', type: 'cardio' },
+      { name: '户外跑步', muscleGroup: '有氧心肺', description: '户外路跑，呼吸新鲜空气，感受路面反馈。', type: 'cardio' },
+      { name: '动感单车', muscleGroup: '有氧心肺', description: '利用动感单车进行高强度间歇或稳定状态骑行。', type: 'cardio' },
+      { name: '椭圆机', muscleGroup: '有氧心肺', description: '低冲击有氧运动，对手肘和膝关节非常友好。', type: 'cardio' },
+      { name: '划船机', muscleGroup: '有氧心肺', description: '全身参与的有氧运动，对背部和腿部都有锻炼。', type: 'cardio' },
+      { name: '爬楼机', muscleGroup: '有氧心肺', description: '模拟爬楼梯，对臀部和大腿肌肉有极强刺激。', type: 'cardio' },
+      { name: '游泳', muscleGroup: '有氧心肺', description: '全身性有氧运动，低关节冲击，极好地锻炼心肺功能。', type: 'cardio' }
   ];
 
   const currentExercises = await db.exercises.toArray();
