@@ -52,15 +52,16 @@ export function WorkoutPage() {
 
   const isResting = restEndTime !== null;
 
-  // 响应式拉取数据
+  // 响应式拉取数据 (使用 startTime 索引进行 $O(1)$ 最新会话状态定位，避免全表扫描)
   const activeSession = useLiveQuery(async () => {
-    const session = await db.workoutSessions.filter(s => !s.endTime).first();
-    return session || null;
+    const latest = await db.workoutSessions.orderBy('startTime').last();
+    return (latest && !latest.endTime) ? latest : null;
   });
 
+  // 使用 sessionId 索引直接拉取当前会话的所有组数，避免复杂对象过滤
   const currentSets = useLiveQuery(() => 
     activeSession?.id 
-      ? db.workoutSets.where({ sessionId: activeSession.id }).toArray() 
+      ? db.workoutSets.where('sessionId').equals(activeSession.id).toArray() 
       : []
   , [activeSession?.id]);
 

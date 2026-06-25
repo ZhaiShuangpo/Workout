@@ -135,11 +135,27 @@ export async function initDB() {
   ];
 
   const currentExercises = await db.exercises.toArray();
-  const currentNames = new Set(currentExercises.map(e => e.name));
+  const currentMap = new Map(currentExercises.map(e => [e.name, e]));
   
-  const missingExercises = defaultExercises.filter(e => !currentNames.has(e.name));
+  const missingExercises: Exercise[] = [];
+  const exercisesToUpdate: Exercise[] = [];
+
+  for (const defEx of defaultExercises) {
+    const existing = currentMap.get(defEx.name);
+    if (!existing) {
+      missingExercises.push(defEx);
+    } else if (existing.type !== defEx.type) {
+      exercisesToUpdate.push({
+        ...existing,
+        type: defEx.type
+      });
+    }
+  }
   
   if (missingExercises.length > 0) {
     await db.exercises.bulkAdd(missingExercises);
+  }
+  if (exercisesToUpdate.length > 0) {
+    await db.exercises.bulkPut(exercisesToUpdate);
   }
 }
