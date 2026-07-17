@@ -6,12 +6,28 @@ export interface Exercise {
   muscleGroup: string;
   description: string;
   type?: 'strength' | 'cardio'; // 默认为 strength
+  loadType?: 'external' | 'bodyweight' | 'bodyweight-added' | 'assisted';
+  equipment?: string;
+  movementPattern?: string;
+}
+
+export interface PlannedExercise {
+  exerciseId: number;
+  order: number;
+  targetSets: number;
+  minReps: number;
+  maxReps: number;
+  targetWeight?: number;
+  targetRpe?: number;
+  restSeconds: number;
+  notes?: string;
 }
 
 export interface WorkoutTemplate {
   id?: number;
   name: string;
   exerciseIds: number[];
+  exercises?: PlannedExercise[];
   scheduledDays?: number[]; // 0 = 周日, 1 = 周一, ..., 6 = 周六
 }
 
@@ -21,6 +37,7 @@ export interface WorkoutSession {
   startTime: Date;
   endTime?: Date;
   notes: string;
+  bodyWeight?: number;
 }
 export interface WorkoutSet {
   id?: number;
@@ -40,6 +57,53 @@ export interface BodyMetric {
   date: Date;
   weight: number;
   bodyFat?: number; // 比例/百分比
+  waist?: number;
+  chest?: number;
+  arm?: number;
+  hips?: number;
+  photo?: Blob;
+}
+
+export interface UserProfile {
+  id: 'current';
+  gender: 'male' | 'female';
+  age: number;
+  height: number;
+  weight: number;
+  activity: number;
+  goal: 'cut' | 'maintain' | 'bulk';
+  calorieAdjustment?: number;
+}
+
+export interface NutritionEntry {
+  id?: number;
+  date: string;
+  name: string;
+  calories: number;
+  protein: number;
+  carbs: number;
+  fat: number;
+  recipeId?: number;
+}
+
+export interface Recipe {
+  id?: number;
+  name: string;
+  calories: number;
+  protein: number;
+  carbs: number;
+  fat: number;
+}
+
+export interface Supplement {
+  id?: number;
+  name: string;
+}
+
+export interface SupplementCheck {
+  id?: number;
+  supplementId: number;
+  date: string;
 }
 
 export class FitnessDB extends Dexie {
@@ -48,6 +112,11 @@ export class FitnessDB extends Dexie {
   workoutSessions!: Table<WorkoutSession>;
   workoutSets!: Table<WorkoutSet>;
   bodyMetrics!: Table<BodyMetric>;
+  userProfiles!: Table<UserProfile, 'current'>;
+  nutritionEntries!: Table<NutritionEntry>;
+  recipes!: Table<Recipe>;
+  supplements!: Table<Supplement>;
+  supplementChecks!: Table<SupplementCheck>;
 
   constructor() {
     super('FitnessDB');
@@ -59,6 +128,29 @@ export class FitnessDB extends Dexie {
     });
     this.version(2).stores({
       bodyMetrics: '++id, date'
+    });
+    this.version(3).stores({
+      userProfiles: 'id',
+      nutritionEntries: '++id, date, recipeId',
+      recipes: '++id, name',
+      supplements: '++id, name',
+      supplementChecks: '++id, supplementId, date, [supplementId+date]'
+    }).upgrade(async tx => {
+      const templates = await tx.table('workoutTemplates').toArray() as WorkoutTemplate[];
+      for (const template of templates) {
+        if (!template.exercises) {
+          template.exercises = template.exerciseIds.map((exerciseId, order) => ({
+            exerciseId,
+            order,
+            targetSets: 3,
+            minReps: 8,
+            maxReps: 12,
+            targetRpe: 8,
+            restSeconds: 90
+          }));
+          await tx.table('workoutTemplates').put(template);
+        }
+      }
     });
   }
 }
@@ -134,6 +226,14 @@ export async function initDB() {
       { name: '游泳', muscleGroup: '有氧心肺', description: '全身性有氧运动，低关节冲击，极好地锻炼心肺功能。', type: 'cardio' }
   ];
 
+  const bodyweightExercises = new Set(['俯卧撑', '引体向上', '卷腹', '平板支撑', '悬垂举腿', '俄罗斯转体']);
+  for (const exercise of defaultExercises) {
+    if (exercise.type !== 'cardio') {
+      exercise.loadType = bodyweightExercises.has(exercise.name) ? 'bodyweight-added' : 'external';
+    }
+  }
+
+  await db.transaction('rw', [db.exercises, db.userProfiles, db.supplements], async () => {
   const currentExercises = await db.exercises.toArray();
   const currentMap = new Map(currentExercises.map(e => [e.name, e]));
   
@@ -144,10 +244,11 @@ export async function initDB() {
     const existing = currentMap.get(defEx.name);
     if (!existing) {
       missingExercises.push(defEx);
-    } else if (existing.type !== defEx.type) {
+    } else if (existing.type !== defEx.type || existing.loadType !== defEx.loadType) {
       exercisesToUpdate.push({
         ...existing,
-        type: defEx.type
+        type: defEx.type,
+        loadType: defEx.loadType
       });
     }
   }
@@ -158,4 +259,31 @@ export async function initDB() {
   if (exercisesToUpdate.length > 0) {
     await db.exercises.bulkPut(exercisesToUpdate);
   }
+
+  if (!await db.userProfiles.get('current')) {
+    let savedProfile: Partial<UserProfile> = {};
+    try {
+      savedProfile = JSON.parse(localStorage.getItem('nutrition_profile') || '{}');
+    } catch {
+      // Ignore corrupt legacy settings and use safe defaults.
+    }
+    await db.userProfiles.put({
+      id: 'current',
+      gender: savedProfile.gender === 'female' ? 'female' : 'male',
+      age: Number(savedProfile.age) || 25,
+      height: Number(savedProfile.height) || 175,
+      weight: Number(savedProfile.weight) || 70,
+      activity: Number(savedProfile.activity) || 1.2,
+      goal: ['cut', 'maintain', 'bulk'].includes(String(savedProfile.goal))
+        ? savedProfile.goal as UserProfile['goal']
+        : 'maintain'
+    });
+  }
+  const canonicalProfile = await db.userProfiles.get('current');
+  if (canonicalProfile) localStorage.setItem('nutrition_profile', JSON.stringify(canonicalProfile));
+
+  if (await db.supplements.count() === 0) {
+    await db.supplements.bulkAdd([{ name: '肌酸' }, { name: '蛋白粉' }, { name: '复合维生素' }]);
+  }
+  });
 }

@@ -1,0 +1,14 @@
+{
+  "name": "健身训练记录",
+  "short_name": "健身记录",
+  "description": "本地优先的训练、营养和身体数据记录工具",
+  "lang": "zh-CN",
+  "start_url": "/#/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#111827",
+  "theme_color": "#2563eb",
+  "icons": [
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

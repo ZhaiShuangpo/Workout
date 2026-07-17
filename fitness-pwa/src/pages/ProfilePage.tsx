@@ -1,8 +1,12 @@
 import { useMemo, useState, useEffect } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, type WorkoutSession, type WorkoutSet, type WorkoutTemplate, type Exercise } from '../db';
+import { estimatedOneRepMax, setVolume } from '../domain/fitness';
+import { downloadBackup, restoreBackup } from '../domain/backup';
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
-import { Activity, Calendar, Zap, Trash2, ChevronDown, ChevronUp, TrendingUp, Flame, Scale } from 'lucide-react';
+import { Activity, Calendar, Zap, Trash2, ChevronDown, ChevronUp, TrendingUp, Flame, Scale, Download, Upload, Moon, Sun } from 'lucide-react';
+
+const WEEK_CUTOFF = Date.now() - 7 * 24 * 60 * 60 * 1000;
 
 function SessionCard({ session, sets, templates, exercises, bodyWeight }: { session: WorkoutSession, sets: WorkoutSet[], templates: WorkoutTemplate[], exercises: Exercise[], bodyWeight: number }) {
   const [isExpanded, setIsExpanded] = useState(false);
@@ -17,8 +21,7 @@ function SessionCard({ session, sets, templates, exercises, bodyWeight }: { sess
   const totalVolume = sessionSets.reduce((total, set) => {
     const exercise = exercises?.find(e => e.id === set.exerciseId);
     if (exercise?.type === 'cardio') return total;
-    const w = set.weight > 0 ? set.weight : bodyWeight;
-    return total + (w * set.reps);
+    return total + setVolume(set, exercise, session.bodyWeight ?? bodyWeight);
   }, 0);
 
   // 按动作分组
@@ -60,8 +63,10 @@ function SessionCard({ session, sets, templates, exercises, bodyWeight }: { sess
             onClick={async (e) => {
               e.stopPropagation();
               if (confirm('确定删除这条训练记录吗？相关的组数数据也会被一并删除。')) {
-                await db.workoutSets.where({ sessionId: session.id }).delete();
-                await db.workoutSessions.delete(session.id!);
+                await db.transaction('rw', [db.workoutSets, db.workoutSessions], async () => {
+                  await db.workoutSets.where({ sessionId: session.id }).delete();
+                  await db.workoutSessions.delete(session.id!);
+                });
               }
             }}
             style={{ background: 'none', border: 'none', color: 'var(--danger-color)', cursor: 'pointer', padding: 0, display: 'flex' }}
@@ -106,7 +111,11 @@ function SessionCard({ session, sets, templates, exercises, bodyWeight }: { sess
                       </>
                     ) : (
                       <>
-                        <span>{set.weight > 0 ? `${set.weight} kg` : '自重'}</span>
+                        <span>{exercise?.loadType === 'bodyweight-added'
+                          ? (set.weight > 0 ? `自重 + ${set.weight} kg` : '自重')
+                          : exercise?.loadType === 'assisted'
+                            ? `辅助 ${set.weight} kg`
+                            : `${set.weight} kg`}</span>
                         <span>{set.reps} 次{set.rpe ? ` @ RPE ${set.rpe}` : ''}</span>
                       </>
                     )}
@@ -121,35 +130,49 @@ function SessionCard({ session, sets, templates, exercises, bodyWeight }: { sess
   );
 }
 
+function ProgressPhoto({ blob, date }: { blob: Blob; date: Date }) {
+  const url = useMemo(() => URL.createObjectURL(blob), [blob]);
+  useEffect(() => () => URL.revokeObjectURL(url), [url]);
+  return (
+    <figure style={{ margin: 0, flex: '0 0 110px' }}>
+      <img src={url} alt={`${date.toLocaleDateString('zh-CN')} 身体对比`} style={{ width: '110px', height: '145px', objectFit: 'cover', borderRadius: '8px' }} />
+      <figcaption style={{ fontSize: '11px', opacity: 0.7, textAlign: 'center' }}>{date.toLocaleDateString('zh-CN')}</figcaption>
+    </figure>
+  );
+}
+
 export function ProfilePage() {
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    const saved = localStorage.getItem('theme');
+    if (saved === 'light' || saved === 'dark') return saved;
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  });
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem('theme', theme);
+  }, [theme]);
   // 从 Dexie 获取所有的记录（按时间倒序）
   const sessions = useLiveQuery(() => db.workoutSessions.orderBy('startTime').reverse().toArray());
   const sets = useLiveQuery(() => db.workoutSets.toArray());
   const templates = useLiveQuery(() => db.workoutTemplates.toArray());
   const exercises = useLiveQuery(() => db.exercises.toArray());
+  const profile = useLiveQuery(() => db.userProfiles.get('current'));
 
   const [chartType, setChartType] = useState<'volume' | '1rm'>('volume');
   const [selectedExerciseId, setSelectedExerciseId] = useState<number>(0);
 
-  const [bodyWeight] = useState<number>(() => {
-    const saved = localStorage.getItem('nutrition_profile');
-    if (saved) {
-      try {
-        const data = JSON.parse(saved);
-        if (data.weight) return Number(data.weight);
-      } catch {
-        // ignore
-      }
-    }
-    return 70;
-  });
-
   // Body metrics queries
   const bodyMetrics = useLiveQuery(() => db.bodyMetrics.orderBy('date').reverse().toArray());
   const bodyMetricsList = useMemo(() => bodyMetrics || [], [bodyMetrics]);
+  const bodyWeight = bodyMetricsList[0]?.weight || profile?.weight || 70;
 
   const [inputWeight, setInputWeight] = useState<string>('');
   const [inputBodyFat, setInputBodyFat] = useState<string>('');
+  const [inputWaist, setInputWaist] = useState('');
+  const [inputChest, setInputChest] = useState('');
+  const [inputArm, setInputArm] = useState('');
+  const [inputHips, setInputHips] = useState('');
+  const [inputPhoto, setInputPhoto] = useState<Blob>();
   const [inputDate, setInputDate] = useState<string>(() => {
     const d = new Date();
     const year = d.getFullYear();
@@ -167,6 +190,10 @@ export function ProfilePage() {
           if (bodyMetrics[0].bodyFat) {
             setInputBodyFat(String(bodyMetrics[0].bodyFat));
           }
+          if (bodyMetrics[0].waist) setInputWaist(String(bodyMetrics[0].waist));
+          if (bodyMetrics[0].chest) setInputChest(String(bodyMetrics[0].chest));
+          if (bodyMetrics[0].arm) setInputArm(String(bodyMetrics[0].arm));
+          if (bodyMetrics[0].hips) setInputHips(String(bodyMetrics[0].hips));
         } else if (bodyWeight) {
           setInputWeight(String(bodyWeight));
         }
@@ -189,6 +216,16 @@ export function ProfilePage() {
     }
 
     const recordDate = new Date(inputDate + 'T00:00:00');
+    const measurements = {
+      waist: inputWaist ? Number(inputWaist) : undefined,
+      chest: inputChest ? Number(inputChest) : undefined,
+      arm: inputArm ? Number(inputArm) : undefined,
+      hips: inputHips ? Number(inputHips) : undefined
+    };
+    if (Object.values(measurements).some(value => value !== undefined && (!Number.isFinite(value) || value < 20 || value > 250))) {
+      alert('围度数据应在 20-250 cm 之间');
+      return;
+    }
 
     const existing = bodyMetricsList.find(m => {
       const d = new Date(m.date);
@@ -196,20 +233,23 @@ export function ProfilePage() {
       return dateStr === inputDate;
     });
 
-    if (existing) {
-      await db.bodyMetrics.update(existing.id!, {
-        weight: w,
-        bodyFat: bf
-      });
-    } else {
-      await db.bodyMetrics.add({
-        date: recordDate,
-        weight: w,
-        bodyFat: bf
-      });
+    await db.transaction('rw', [db.bodyMetrics, db.userProfiles], async () => {
+      if (existing) {
+        await db.bodyMetrics.update(existing.id!, { weight: w, bodyFat: bf, ...measurements, photo: inputPhoto || existing.photo });
+      } else {
+        await db.bodyMetrics.add({ date: recordDate, weight: w, bodyFat: bf, ...measurements, photo: inputPhoto });
+      }
+      if (profile) await db.userProfiles.update('current', { weight: w });
+    });
+    try {
+      const legacy = JSON.parse(localStorage.getItem('nutrition_profile') || '{}');
+      localStorage.setItem('nutrition_profile', JSON.stringify({ ...legacy, weight: w }));
+    } catch {
+      // IndexedDB remains the source of truth.
     }
 
     alert('体征记录保存成功！');
+    setInputPhoto(undefined);
   };
 
   const bodyMetricsChartData = useMemo(() => {
@@ -294,6 +334,29 @@ export function ProfilePage() {
 
   const activeExerciseId = selectedExerciseId || defaultExerciseId;
 
+  const weeklyMuscleSets = useMemo(() => {
+    if (!sessions || !sets || !exercises) return [];
+    const recentSessionIds = new Set(sessions.filter(session => session.endTime && new Date(session.startTime).getTime() >= WEEK_CUTOFF).map(session => session.id));
+    const counts = new Map<string, number>();
+    for (const set of sets) {
+      if (!recentSessionIds.has(set.sessionId)) continue;
+      const exercise = exercises.find(item => item.id === set.exerciseId);
+      if (!exercise || exercise.type === 'cardio') continue;
+      counts.set(exercise.muscleGroup, (counts.get(exercise.muscleGroup) || 0) + 1);
+    }
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  }, [sessions, sets, exercises]);
+
+  const handleRestore = async (file: File | undefined) => {
+    if (!file || !confirm('恢复备份会替换当前设备上的全部健身数据，确定继续吗？')) return;
+    try {
+      await restoreBackup(file);
+      alert('数据恢复成功');
+    } catch (error) {
+      alert(error instanceof Error ? error.message : '数据恢复失败');
+    }
+  };
+
   // 1. 计算每个 Session 的总容量 (Volume) 和图表数据（排除有氧运动）
   const chartData = useMemo(() => {
     if (!sessions || !sets) return [];
@@ -309,8 +372,7 @@ export function ProfilePage() {
       const volume = sessionSets.reduce((total, set) => {
         const exercise = exercises?.find(e => e.id === set.exerciseId);
         if (exercise?.type === 'cardio') return total;
-        const weight = set.weight > 0 ? set.weight : bodyWeight; // 如果是徒手(0kg)算作自重
-        return total + (weight * set.reps);
+        return total + setVolume(set, exercise, session.bodyWeight ?? bodyWeight);
       }, 0);
 
       // 格式化日期，如 "5月12日"
@@ -351,9 +413,9 @@ export function ProfilePage() {
       const session = sessionMap.get(sessId)!;
 
       const max1RM = setsArray.reduce((max, set) => {
-        const w = set.weight > 0 ? set.weight : bodyWeight;
-        const estimated1RM = set.reps === 1 ? w : w * (1 + set.reps / 30);
-        return Math.max(max, estimated1RM);
+        const exercise = exercises?.find(item => item.id === set.exerciseId);
+        const value = estimatedOneRepMax(set, exercise, session.bodyWeight ?? bodyWeight);
+        return value === null ? max : Math.max(max, value);
       }, 0);
 
       return {
@@ -372,7 +434,7 @@ export function ProfilePage() {
         '1RM': dp.r1rm
       };
     });
-  }, [sessions, sets, activeExerciseId, bodyWeight]);
+  }, [sessions, sets, activeExerciseId, bodyWeight, exercises]);
 
   // 2. 渲染历史记录列表
   const renderHistory = () => {
@@ -400,10 +462,29 @@ export function ProfilePage() {
 
   return (
     <div style={{ padding: '20px' }}>
-      <h2 style={{ marginTop: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
-        <Activity size={24} color="var(--primary-color)" /> 
-        数据统计
-      </h2>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <h2 style={{ marginTop: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <Activity size={24} color="var(--primary-color)" /> 数据统计
+        </h2>
+        <div style={{ display: 'flex', gap: '6px' }}>
+          <button aria-label="切换明暗主题" title="切换明暗主题" onClick={() => setTheme(value => value === 'dark' ? 'light' : 'dark')} style={iconButtonStyle}>
+            {theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
+          </button>
+          <button aria-label="导出数据" title="导出数据" onClick={downloadBackup} style={iconButtonStyle}><Download size={17} /></button>
+          <label aria-label="导入数据" title="导入数据" style={{ ...iconButtonStyle, display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
+            <Upload size={17} /><input type="file" accept="application/json" hidden onChange={event => handleRestore(event.target.files?.[0])} />
+          </label>
+        </div>
+      </div>
+
+      {weeklyMuscleSets.length > 0 && (
+        <div style={{ background: 'var(--surface-color)', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '12px', marginBottom: '18px' }}>
+          <div style={{ fontSize: '13px', fontWeight: 'bold', marginBottom: '8px' }}>最近 7 天肌群训练组数</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '7px' }}>
+            {weeklyMuscleSets.map(([group, count]) => <span key={group} style={{ fontSize: '12px', background: 'var(--bg-color)', borderRadius: '14px', padding: '5px 9px' }}>{group} {count}组</span>)}
+          </div>
+        </div>
+      )}
 
       {/* 选项卡切换 */}
       <div style={{ display: 'flex', gap: '8px', marginBottom: '20px', backgroundColor: 'var(--surface-color)', padding: '4px', borderRadius: '10px', border: '1px solid var(--border-color)' }}>
@@ -670,6 +751,21 @@ export function ProfilePage() {
             />
           </div>
         </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px', marginBottom: '12px' }}>
+          {[
+            ['腰围', inputWaist, setInputWaist], ['胸围', inputChest, setInputChest],
+            ['臂围', inputArm, setInputArm], ['臀围', inputHips, setInputHips]
+          ].map(([label, value, setter]) => (
+            <label key={String(label)} style={{ fontSize: '11px', opacity: 0.8 }}>
+              {String(label)} (cm)
+              <input type="number" step="0.1" value={value as string} onChange={event => (setter as (value: string) => void)(event.target.value)} style={smallInputStyle} />
+            </label>
+          ))}
+        </div>
+        <label style={{ display: 'block', fontSize: '11px', opacity: 0.8, marginBottom: '12px' }}>
+          对比照片（保存在本机备份中）
+          <input type="file" accept="image/*" onChange={event => setInputPhoto(event.target.files?.[0])} style={{ display: 'block', marginTop: '5px', maxWidth: '100%' }} />
+        </label>
         <button 
           onClick={handleSaveMetric}
           style={{
@@ -780,6 +876,15 @@ export function ProfilePage() {
             </div>
           </div>
         )}
+
+        {bodyMetricsList.some(metric => metric.photo) && (
+          <div style={{ marginTop: '16px', borderTop: '1px solid var(--border-color)', paddingTop: '14px' }}>
+            <h4 style={{ margin: '0 0 10px', fontSize: '13px' }}>对比照片</h4>
+            <div style={{ display: 'flex', gap: '10px', overflowX: 'auto' }}>
+              {bodyMetricsList.filter(metric => metric.photo).map(metric => <ProgressPhoto key={metric.id} blob={metric.photo!} date={new Date(metric.date)} />)}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* 历史记录列表 */}
@@ -790,3 +895,12 @@ export function ProfilePage() {
     </div>
   );
 }
+
+const iconButtonStyle = {
+  border: '1px solid var(--border-color)',
+  borderRadius: '7px',
+  padding: '7px',
+  background: 'var(--surface-color)',
+  color: 'var(--text-color)',
+  cursor: 'pointer'
+};

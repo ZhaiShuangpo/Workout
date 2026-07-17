@@ -1,10 +1,10 @@
 import { useState, useEffect } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { db, type Exercise, type WorkoutSession } from '../db';
-import { Timer, Plus, Minus, Check, Play, Square, Dumbbell, SkipForward, Trash2 } from 'lucide-react';
+import { db, type WorkoutSession } from '../db';
+import { Timer, Plus, Minus, Check, Play, Square, Dumbbell, SkipForward, Trash2, RefreshCw } from 'lucide-react';
 
 export function WorkoutPage() {
-  const [allExercises, setAllExercises] = useState<Exercise[]>([]);
+  const allExercises = useLiveQuery(() => db.exercises.toArray()) || [];
   const [selectedExId, setSelectedExId] = useState<number>(() => Number(localStorage.getItem('workout_selectedExId')) || 0);
   const [weight, setWeight] = useState<number>(() => Number(localStorage.getItem('workout_weight')) || 20); // 默认空杆
   const [reps, setReps] = useState<number>(() => Number(localStorage.getItem('workout_reps')) || 10);
@@ -20,6 +20,7 @@ export function WorkoutPage() {
   const [rpe, setRpe] = useState<number>(() => Number(localStorage.getItem('workout_rpe')) || 8);
   const [duration, setDuration] = useState<number>(() => Number(localStorage.getItem('workout_duration')) || 20); // 默认20分钟
   const [distance, setDistance] = useState<number>(() => Number(localStorage.getItem('workout_distance')) || 2.0); // 默认2.0km
+  const [showAllExercises, setShowAllExercises] = useState(false);
 
   // 状态持久化
   useEffect(() => {
@@ -66,6 +67,7 @@ export function WorkoutPage() {
   , [activeSession?.id]);
 
   const templates = useLiveQuery(() => db.workoutTemplates.toArray()) || [];
+  const profile = useLiveQuery(() => db.userProfiles.get('current'));
 
   // 获取当前动作在上一次表现作为超负荷提示
   const lastExerciseSets = useLiveQuery(async () => {
@@ -106,12 +108,6 @@ export function WorkoutPage() {
     };
   }, [selectedExId, activeSession?.id]);
 
-  useEffect(() => {
-    db.exercises.toArray().then((data) => {
-      setAllExercises(data);
-    });
-  }, []);
-
   // 倒计时逻辑：基于绝对时间，不受息屏影响
   useEffect(() => {
     if (!restEndTime) return;
@@ -149,7 +145,8 @@ export function WorkoutPage() {
     await db.workoutSessions.add({
       templateId,
       startTime: new Date(),
-      notes: ''
+      notes: '',
+      bodyWeight: profile?.weight
     });
   };
 
@@ -177,10 +174,28 @@ export function WorkoutPage() {
     
     // 计算当前动作是第几组
     const exSets = currentSets?.filter(s => s.exerciseId === selectedExId) || [];
-    const setNumber = exSets.length + 1;
+    const setNumber = Math.max(0, ...exSets.map(set => set.setNumber || 0)) + 1;
 
     const currentEx = allExercises.find(e => e.id === selectedExId);
     const isCardio = currentEx?.type === 'cardio';
+
+    if (!currentEx) {
+      alert('请先选择一个有效动作');
+      return;
+    }
+    if (rpe < 5 || rpe > 10 || selectedRestTime < 0 || selectedRestTime > 1800) {
+      alert('请检查 RPE 和休息时间，休息时间应为 0-1800 秒');
+      return;
+    }
+    if (isCardio) {
+      if (!Number.isFinite(duration) || duration <= 0 || !Number.isFinite(distance) || distance < 0) {
+        alert('有氧时间必须大于 0，距离不能为负数');
+        return;
+      }
+    } else if (!Number.isFinite(weight) || weight < 0 || !Number.isInteger(reps) || reps <= 0 || reps > 100) {
+      alert('重量不能为负数，次数应为 1-100 的整数');
+      return;
+    }
 
     await db.workoutSets.add({
       sessionId: activeSession.id,
@@ -213,18 +228,51 @@ export function WorkoutPage() {
 
   // 根据当前会话的模板过滤动作列表
   const sessionTemplate = templates.find(t => t.id === activeSession?.templateId);
-  const sessionExercises = sessionTemplate 
-    ? allExercises.filter(ex => sessionTemplate.exerciseIds.includes(ex.id!))
+  const plannedIds = sessionTemplate?.exercises
+    ? [...sessionTemplate.exercises].sort((a, b) => a.order - b.order).map(item => item.exerciseId)
+    : sessionTemplate?.exerciseIds;
+  const sessionExercises = sessionTemplate && !showAllExercises
+    ? (plannedIds || []).map(id => allExercises.find(ex => ex.id === id)).filter(ex => ex !== undefined)
     : allExercises;
 
   const currentEx = allExercises.find(e => e.id === selectedExId);
   const isCardio = currentEx?.type === 'cardio';
+  const currentPlan = sessionTemplate?.exercises?.find(item => item.exerciseId === selectedExId);
+  const completedForTemplate = sessionTemplate?.exercises?.filter(item =>
+    (currentSets || []).filter(set => set.exerciseId === item.exerciseId).length >= item.targetSets
+  ).length || 0;
+
+  useEffect(() => {
+    if (activeSession === null) {
+      const timer = window.setTimeout(() => {
+        setIsDoingSet(false);
+        setRestEndTime(null);
+        setRestTimeLeft(0);
+      }, 0);
+      return () => window.clearTimeout(timer);
+    }
+  }, [activeSession]);
+
+  const applyLastPerformance = () => {
+    const last = lastExerciseSets?.sets.at(-1);
+    if (!last) return;
+    if (isCardio) {
+      setDuration(last.duration || 20);
+      setDistance(last.distance || 0);
+    } else {
+      setWeight(last.weight);
+      setReps(last.reps);
+    }
+    if (last.rpe) setRpe(last.rpe);
+  };
 
   // 自动选中第一个动作
   useEffect(() => {
     if (sessionExercises.length > 0 && !sessionExercises.find(e => e.id === selectedExId)) {
       const timer = setTimeout(() => {
-        setSelectedExId(sessionExercises[0].id!);
+        const first = sessionExercises[0];
+        setSelectedExId(first.id!);
+        if (first.loadType === 'bodyweight' || first.loadType === 'bodyweight-added' || first.loadType === 'assisted') setWeight(0);
       }, 0);
       return () => clearTimeout(timer);
     }
@@ -284,6 +332,7 @@ export function WorkoutPage() {
     const dateStr = new Date(sessionDate).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' });
     const nextWeight = bestSet.weight + 2.5;
     const nextReps = bestSet.reps + 1;
+    const readyToProgress = !bestSet.rpe || bestSet.rpe <= 8;
 
     return (
       <div style={{
@@ -303,7 +352,9 @@ export function WorkoutPage() {
           {bestSet.rpe ? ` @ RPE ${bestSet.rpe}` : ''}。
         </div>
         <div style={{ marginTop: '6px', color: 'var(--success-color)', fontWeight: '500' }}>
-          今日目标推荐：尝试 <span style={{ textDecoration: 'underline' }}>{nextWeight} kg × {bestSet.reps} 次</span> 或 <span style={{ textDecoration: 'underline' }}>{bestSet.weight} kg × {nextReps} 次</span>！
+          {readyToProgress ? <>
+            今日目标推荐：尝试 <span style={{ textDecoration: 'underline' }}>{nextWeight} kg × {bestSet.reps} 次</span> 或 <span style={{ textDecoration: 'underline' }}>{bestSet.weight} kg × {nextReps} 次</span>！
+          </> : <>上次强度较高，今日优先稳定完成相同重量与次数，不建议盲目加重。</>}
         </div>
       </div>
     );
@@ -344,7 +395,11 @@ export function WorkoutPage() {
                 </>
               ) : (
                 <>
-                  <span style={{ fontWeight: 'bold', width: '70px', textAlign: 'center' }}>{set.weight} kg</span>
+                  <span style={{ fontWeight: 'bold', width: '90px', textAlign: 'center' }}>
+                    {currentEx?.loadType === 'bodyweight-added'
+                      ? (set.weight > 0 ? `自重+${set.weight}kg` : '自重')
+                      : currentEx?.loadType === 'assisted' ? `辅助${set.weight}kg` : `${set.weight} kg`}
+                  </span>
                   <span style={{ fontWeight: 'bold', width: '70px', textAlign: 'center' }}>{set.reps} 次</span>
                 </>
               )}
@@ -483,22 +538,52 @@ export function WorkoutPage() {
         )}
       </h2>
 
+      {sessionTemplate?.exercises && (
+        <div style={{ margin: '-4px 0 18px', fontSize: '13px', opacity: 0.75 }}>
+          计划进度：{completedForTemplate}/{sessionTemplate.exercises.length} 个动作达到目标组数
+        </div>
+      )}
+
       {/* 动作选择 */}
       <div style={{ marginBottom: '24px' }}>
         <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold' }}>当前动作</label>
-        <select 
-          value={selectedExId} 
-          onChange={(e) => setSelectedExId(Number(e.target.value))}
-          style={{ 
-            width: '100%', padding: '12px', fontSize: '16px', 
-            borderRadius: '8px', border: '1px solid var(--border-color)',
-            backgroundColor: 'var(--surface-color)', color: 'var(--text-color)'
-          }}
-        >
-          {sessionExercises.map(ex => (
-            <option key={ex.id} value={ex.id}>{ex.name}</option>
-          ))}
-        </select>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <select 
+            value={selectedExId} 
+            onChange={(e) => {
+              const id = Number(e.target.value);
+              setSelectedExId(id);
+              const plan = sessionTemplate?.exercises?.find(item => item.exerciseId === id);
+              if (plan) setSelectedRestTime(plan.restSeconds);
+              const exercise = allExercises.find(item => item.id === id);
+              if (exercise?.loadType === 'bodyweight' || exercise?.loadType === 'bodyweight-added' || exercise?.loadType === 'assisted') setWeight(0);
+            }}
+            style={{ 
+              flex: 1, minWidth: 0, padding: '12px', fontSize: '16px', 
+              borderRadius: '8px', border: '1px solid var(--border-color)',
+              backgroundColor: 'var(--surface-color)', color: 'var(--text-color)'
+            }}
+          >
+            {sessionExercises.map(ex => (
+              <option key={ex.id} value={ex.id}>{ex.name}</option>
+            ))}
+          </select>
+          {sessionTemplate && (
+            <button onClick={() => setShowAllExercises(value => !value)} style={{ padding: '0 10px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--surface-color)', color: 'var(--text-color)' }}>
+              {showAllExercises ? '仅计划' : '替换动作'}
+            </button>
+          )}
+        </div>
+        {(currentPlan || lastExerciseSets?.sets.length) && (
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px', fontSize: '12px', opacity: 0.8 }}>
+            <span>{currentPlan ? `目标 ${currentPlan.targetSets} 组 × ${currentPlan.minReps}-${currentPlan.maxReps} 次 @ RPE ${currentPlan.targetRpe || 8}` : '临时替换动作'}</span>
+            {lastExerciseSets?.sets.length ? (
+              <button onClick={applyLastPerformance} style={{ display: 'flex', alignItems: 'center', gap: '4px', border: 'none', background: 'none', color: 'var(--primary-color)', cursor: 'pointer' }}>
+                <RefreshCw size={13} /> 套用上次
+              </button>
+            ) : null}
+          </div>
+        )}
       </div>
 
       {/* 渐进性超负荷建议 */}
@@ -569,7 +654,9 @@ export function WorkoutPage() {
           <>
             {/* 重量 */}
             <div style={{ flex: 1, backgroundColor: 'var(--surface-color)', padding: '16px 8px', borderRadius: '12px', textAlign: 'center' }}>
-              <div style={{ fontSize: '14px', marginBottom: '8px', opacity: 0.8 }}>重量 (kg)</div>
+              <div style={{ fontSize: '14px', marginBottom: '8px', opacity: 0.8 }}>
+                {currentEx?.loadType === 'bodyweight-added' ? '额外负重 (kg)' : currentEx?.loadType === 'assisted' ? '辅助重量 (kg)' : '重量 (kg)'}
+              </div>
               <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '4px' }}>
                 <button onClick={() => setWeight(w => Math.max(0, w - 2.5))} style={btnStyle}><Minus size={16}/></button>
                 <input

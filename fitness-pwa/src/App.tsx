@@ -1,20 +1,24 @@
-import { BrowserRouter as Router, Routes, Route, NavLink } from 'react-router-dom';
+import { lazy, Suspense } from 'react';
+import { HashRouter as Router, Routes, Route, NavLink } from 'react-router-dom';
 import { Dumbbell, ClipboardList, Utensils, User } from 'lucide-react';
-import { WorkoutPage } from './pages/WorkoutPage';
-import { PlansPage } from './pages/PlansPage';
-import { NutritionPage } from './pages/NutritionPage';
-import { ProfilePage } from './pages/ProfilePage';
+
+const WorkoutPage = lazy(() => import('./pages/WorkoutPage').then(module => ({ default: module.WorkoutPage })));
+const PlansPage = lazy(() => import('./pages/PlansPage').then(module => ({ default: module.PlansPage })));
+const NutritionPage = lazy(() => import('./pages/NutritionPage').then(module => ({ default: module.NutritionPage })));
+const ProfilePage = lazy(() => import('./pages/ProfilePage').then(module => ({ default: module.ProfilePage })));
 
 function App() {
   return (
     <Router>
       <div style={{ flex: 1, paddingBottom: '70px', overflowY: 'auto' }}>
-        <Routes>
-          <Route path="/" element={<WorkoutPage />} />
-          <Route path="/plans" element={<PlansPage />} />
-          <Route path="/nutrition" element={<NutritionPage />} />
-          <Route path="/profile" element={<ProfilePage />} />
-        </Routes>
+        <Suspense fallback={<div style={{ padding: '20px' }}>加载中...</div>}>
+          <Routes>
+            <Route path="/" element={<WorkoutPage />} />
+            <Route path="/plans" element={<PlansPage />} />
+            <Route path="/nutrition" element={<NutritionPage />} />
+            <Route path="/profile" element={<ProfilePage />} />
+          </Routes>
+        </Suspense>
       </div>
 
       {/* 底部导航栏 */}

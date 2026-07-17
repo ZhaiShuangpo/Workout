@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { db, type WorkoutTemplate } from '../db';
-import { Plus, Check, Dumbbell, Calendar as CalendarIcon, Edit2, Trash2 } from 'lucide-react';
+import { db, type PlannedExercise, type WorkoutTemplate } from '../db';
+import { Plus, Check, Dumbbell, Calendar as CalendarIcon, Edit2, Trash2, Copy, ArrowUp, ArrowDown } from 'lucide-react';
 
 const WEEK_DAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
 
@@ -12,6 +12,7 @@ export function PlansPage() {
   const [selectedExerciseIds, setSelectedExerciseIds] = useState<number[]>([]);
   const [selectedDays, setSelectedDays] = useState<number[]>([]);
   const [editingTemplateId, setEditingTemplateId] = useState<number | null>(null);
+  const [exercisePlans, setExercisePlans] = useState<Record<number, PlannedExercise>>({});
 
   const exercises = useLiveQuery(() => db.exercises.toArray()) || [];
   const templates = useLiveQuery(() => db.workoutTemplates.toArray()) || [];
@@ -26,17 +27,27 @@ export function PlansPage() {
       return;
     }
 
+    const plannedExercises = selectedExerciseIds.map((exerciseId, order) => ({
+      ...(exercisePlans[exerciseId] || {
+        exerciseId, targetSets: 3, minReps: 8, maxReps: 12, targetRpe: 8, restSeconds: 90
+      }),
+      exerciseId,
+      order
+    }));
+
     if (editingTemplateId) {
       await db.workoutTemplates.update(editingTemplateId, {
         name: newTemplateName.trim(),
         exerciseIds: selectedExerciseIds,
         scheduledDays: selectedDays,
+        exercises: plannedExercises,
       });
     } else {
       await db.workoutTemplates.add({
         name: newTemplateName.trim(),
         exerciseIds: selectedExerciseIds,
         scheduledDays: selectedDays,
+        exercises: plannedExercises,
       });
     }
 
@@ -45,6 +56,7 @@ export function PlansPage() {
     setNewTemplateName('');
     setSelectedExerciseIds([]);
     setSelectedDays([]);
+    setExercisePlans({});
   };
 
   const handleEditTemplate = (tpl: WorkoutTemplate) => {
@@ -52,6 +64,9 @@ export function PlansPage() {
     setNewTemplateName(tpl.name);
     setSelectedExerciseIds(tpl.exerciseIds);
     setSelectedDays(tpl.scheduledDays || []);
+    setExercisePlans(Object.fromEntries((tpl.exercises || tpl.exerciseIds.map((exerciseId, order) => ({
+      exerciseId, order, targetSets: 3, minReps: 8, maxReps: 12, targetRpe: 8, restSeconds: 90
+    }))).map(item => [item.exerciseId, item])));
     setIsCreating(true);
   };
 
@@ -62,9 +77,39 @@ export function PlansPage() {
   };
 
   const toggleExerciseSelection = (id: number) => {
-    setSelectedExerciseIds(prev => 
-      prev.includes(id) ? prev.filter(eId => eId !== id) : [...prev, id]
-    );
+    setSelectedExerciseIds(prev => {
+      if (prev.includes(id)) {
+        setExercisePlans(plans => {
+          const next = { ...plans };
+          delete next[id];
+          return next;
+        });
+        return prev.filter(eId => eId !== id);
+      }
+      setExercisePlans(plans => ({ ...plans, [id]: {
+        exerciseId: id, order: prev.length, targetSets: 3, minReps: 8, maxReps: 12, targetRpe: 8, restSeconds: 90
+      }}));
+      return [...prev, id];
+    });
+  };
+
+  const updatePlan = (id: number, patch: Partial<PlannedExercise>) => {
+    setExercisePlans(prev => ({ ...prev, [id]: { ...prev[id], ...patch } }));
+  };
+
+  const moveExercise = (id: number, direction: -1 | 1) => {
+    setSelectedExerciseIds(prev => {
+      const from = prev.indexOf(id);
+      const to = from + direction;
+      if (from < 0 || to < 0 || to >= prev.length) return prev;
+      const next = [...prev];
+      [next[from], next[to]] = [next[to], next[from]];
+      return next;
+    });
+  };
+
+  const handleDuplicateTemplate = async (tpl: WorkoutTemplate) => {
+    await db.workoutTemplates.add({ ...tpl, id: undefined, name: `${tpl.name}（副本）` });
   };
 
   const toggleDaySelection = (dayIndex: number) => {
@@ -140,6 +185,9 @@ export function PlansPage() {
                           )}
                         </div>
                         <div style={{ display: 'flex', gap: '8px' }}>
+                          <button aria-label="复制计划" onClick={() => handleDuplicateTemplate(tpl)} style={{ background: 'none', border: 'none', color: 'var(--primary-color)', cursor: 'pointer', padding: '4px' }}>
+                            <Copy size={18} />
+                          </button>
                           <button onClick={() => handleEditTemplate(tpl)} style={{ background: 'none', border: 'none', color: 'var(--text-color)', opacity: 0.6, cursor: 'pointer', padding: '4px' }}>
                             <Edit2 size={18} />
                           </button>
@@ -198,20 +246,42 @@ export function PlansPage() {
               
               <h4 style={{ margin: '0 0 12px 0', fontSize: '14px' }}>包含动作 ({selectedExerciseIds.length})</h4>
               <div style={{ maxHeight: '300px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '24px' }}>
-                {exercises.map(ex => {
+                {[...exercises].sort((a, b) => {
+                  const ai = selectedExerciseIds.indexOf(a.id!);
+                  const bi = selectedExerciseIds.indexOf(b.id!);
+                  if (ai >= 0 && bi >= 0) return ai - bi;
+                  if (ai >= 0) return -1;
+                  if (bi >= 0) return 1;
+                  return a.name.localeCompare(b.name, 'zh-CN');
+                }).map(ex => {
                   const isSelected = selectedExerciseIds.includes(ex.id!);
+                  const plan = exercisePlans[ex.id!];
                   return (
                     <div 
                       key={ex.id} 
-                      onClick={() => toggleExerciseSelection(ex.id!)}
                       style={{
-                        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                        display: 'flex', flexDirection: 'column', gap: '10px',
                         padding: '12px', borderRadius: '8px', border: `1px solid ${isSelected ? 'var(--primary-color)' : 'var(--border-color)'}`,
                         backgroundColor: isSelected ? 'var(--primary-active)' : 'var(--bg-color)',
                         color: isSelected ? '#fff' : 'var(--text-color)', cursor: 'pointer'
                       }}>
-                      <span>{ex.name} <span style={{ fontSize: '12px', opacity: 0.6, marginLeft: '4px' }}>({ex.muscleGroup})</span></span>
-                      {isSelected && <Check size={18} />}
+                      <div onClick={() => toggleExerciseSelection(ex.id!)} style={{ display: 'flex', justifyContent: 'space-between', cursor: 'pointer' }}>
+                        <span>{ex.name} <span style={{ fontSize: '12px', opacity: 0.6, marginLeft: '4px' }}>({ex.muscleGroup})</span></span>
+                        {isSelected && <Check size={18} />}
+                      </div>
+                      {isSelected && plan && (
+                        <div onClick={event => event.stopPropagation()} style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '6px', color: '#fff' }}>
+                          <PlanNumber label="组" value={plan.targetSets} onChange={value => updatePlan(ex.id!, { targetSets: value })} />
+                          <PlanNumber label="最低次数" value={plan.minReps} onChange={value => updatePlan(ex.id!, { minReps: value })} />
+                          <PlanNumber label="最高次数" value={plan.maxReps} onChange={value => updatePlan(ex.id!, { maxReps: value })} />
+                          <PlanNumber label="RPE" value={plan.targetRpe || 8} onChange={value => updatePlan(ex.id!, { targetRpe: value })} />
+                          <PlanNumber label="休息秒" value={plan.restSeconds} onChange={value => updatePlan(ex.id!, { restSeconds: value })} />
+                          <div style={{ gridColumn: '1 / -1', display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+                            <button aria-label="上移动作" onClick={() => moveExercise(ex.id!, -1)}><ArrowUp size={16} /></button>
+                            <button aria-label="下移动作" onClick={() => moveExercise(ex.id!, 1)}><ArrowDown size={16} /></button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -225,6 +295,7 @@ export function PlansPage() {
                     setNewTemplateName('');
                     setSelectedExerciseIds([]);
                     setSelectedDays([]);
+                    setExercisePlans({});
                   }}
                   style={{ flex: 1, padding: '14px', borderRadius: '8px', border: 'none', backgroundColor: 'var(--border-color)', color: 'var(--text-color)', fontWeight: 'bold', fontSize: '16px', cursor: 'pointer' }}>
                   取消
@@ -264,5 +335,21 @@ export function PlansPage() {
         </div>
       )}
     </div>
+  );
+}
+
+function PlanNumber({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
+  return (
+    <label style={{ fontSize: '10px', display: 'flex', flexDirection: 'column', gap: '3px' }}>
+      {label}
+      <input
+        aria-label={label}
+        type="number"
+        min={1}
+        value={value}
+        onChange={event => onChange(Math.max(1, Number(event.target.value) || 1))}
+        style={{ width: '100%', minWidth: 0, padding: '5px', borderRadius: '5px', border: 'none' }}
+      />
+    </label>
   );
 }
