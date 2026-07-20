@@ -21,3 +21,11 @@ npm run build
 ```
 
 `dist/` 为静态部署产物。路由使用 URL hash，因此不依赖服务器端 SPA fallback。
+
+## HTTPS 部署
+
+Service Worker、离线安装和通知要求 HTTPS。仓库根目录提供 `nginx-fitness.conf.template`，将其中的域名和证书路径占位符替换后安装到 Nginx；证书可由服务器上的 Certbot 签发。切换 HTTP 到 HTTPS 前应先从旧地址导出数据，因为两个来源的 IndexedDB 不共享。
+
+## 同步扩展
+
+`src/domain/sync.ts` 定义了与厂商无关的 `SyncProvider`、设备标识和快照协议。接入自建 API、WebDAV 或对象存储时实现该接口即可；当前版本没有默认上传用户的健康数据。

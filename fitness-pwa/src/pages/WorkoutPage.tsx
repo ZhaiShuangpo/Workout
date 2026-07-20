@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, type WorkoutSession } from '../db';
+import { effectiveLoad, formatDuration, formatPace, formatRecordedSet, getDistanceMeters, getDurationSeconds, paceSecondsPerKm, SET_KIND_LABELS, setMeetsPlan } from '../domain/fitness';
 import { Timer, Plus, Minus, Check, Play, Square, Dumbbell, SkipForward, Trash2, RefreshCw } from 'lucide-react';
 
 export function WorkoutPage() {
@@ -20,6 +21,21 @@ export function WorkoutPage() {
   const [rpe, setRpe] = useState<number>(() => Number(localStorage.getItem('workout_rpe')) || 8);
   const [duration, setDuration] = useState<number>(() => Number(localStorage.getItem('workout_duration')) || 20); // 默认20分钟
   const [distance, setDistance] = useState<number>(() => Number(localStorage.getItem('workout_distance')) || 2.0); // 默认2.0km
+  const [durationRemainderSeconds, setDurationRemainderSeconds] = useState(0);
+  const [level, setLevel] = useState(1);
+  const [incline, setIncline] = useState(0);
+  const [heartRate, setHeartRate] = useState(0);
+  const [cadence, setCadence] = useState(0);
+  const [strokeRate, setStrokeRate] = useState(0);
+  const [poolLengthMeters, setPoolLengthMeters] = useState(25);
+  const [swimStroke, setSwimStroke] = useState('自由泳');
+  const [workSeconds, setWorkSeconds] = useState(30);
+  const [recoverySeconds, setRecoverySeconds] = useState(30);
+  const [intervals, setIntervals] = useState(8);
+  const [setKind, setSetKind] = useState<'warmup' | 'working' | 'drop' | 'failure'>('working');
+  const [loadTypeOverride, setLoadTypeOverride] = useState<'external' | 'bodyweight' | 'bodyweight-added' | 'assisted'>('external');
+  const [setStartedAt, setSetStartedAt] = useState<number | null>(null);
+  const [activeSetSeconds, setActiveSetSeconds] = useState(0);
   const [showAllExercises, setShowAllExercises] = useState(false);
 
   // 状态持久化
@@ -50,6 +66,12 @@ export function WorkoutPage() {
   useEffect(() => {
     localStorage.setItem('workout_distance', String(distance));
   }, [distance]);
+  useEffect(() => {
+    if (!isDoingSet || !setStartedAt) return;
+    const update = () => setActiveSetSeconds(Math.max(0, Math.round((Date.now() - setStartedAt) / 1000)));
+    const timer = window.setInterval(update, 1000);
+    return () => window.clearInterval(timer);
+  }, [isDoingSet, setStartedAt]);
 
   const isResting = restEndTime !== null;
 
@@ -118,6 +140,10 @@ export function WorkoutPage() {
       if (left <= 0) {
         setRestTimeLeft(0);
         setRestEndTime(null);
+        navigator.vibrate?.([200, 100, 200]);
+        if ('Notification' in window && Notification.permission === 'granted') {
+          navigator.serviceWorker?.ready.then(registration => registration.showNotification('休息结束', { body: '该练下一组了！', icon: '/favicon.svg', tag: 'rest-timer' })).catch(console.error);
+        }
         alert("休息结束，该练下一组了！");
       } else {
         setRestTimeLeft(left);
@@ -152,7 +178,13 @@ export function WorkoutPage() {
 
   const handleEndWorkout = async () => {
     if (activeSession?.id) {
-      if (confirm("确认结束本次训练吗？")) {
+      const incomplete = sessionTemplate?.exercises?.length
+        ? sessionTemplate.exercises.length - completedForTemplate
+        : 0;
+      const message = (currentSets || []).length === 0
+        ? '本次训练还没有记录，确认结束吗？'
+        : incomplete > 0 ? `还有 ${incomplete} 个动作未达到计划目标，仍要结束吗？` : '确认结束本次训练吗？';
+      if (confirm(message)) {
         await db.workoutSessions.update(activeSession.id, {
           endTime: new Date()
         });
@@ -165,6 +197,8 @@ export function WorkoutPage() {
 
   const handleStartSet = () => {
     setIsDoingSet(true);
+    setSetStartedAt(Date.now());
+    setActiveSetSeconds(0);
     setRestEndTime(null);
     setRestTimeLeft(0);
   };
@@ -183,16 +217,29 @@ export function WorkoutPage() {
       alert('请先选择一个有效动作');
       return;
     }
+    const mode = currentEx.recordingMode || (isCardio ? 'distance_time' : 'weight_reps');
+    const enteredDurationSeconds = duration * 60 + durationRemainderSeconds;
+    const elapsedSeconds = setStartedAt ? Math.max(1, Math.round((Date.now() - setStartedAt) / 1000)) : 0;
+    const measuredDurationSeconds = enteredDurationSeconds > 0 ? enteredDurationSeconds : elapsedSeconds;
     if (rpe < 5 || rpe > 10 || selectedRestTime < 0 || selectedRestTime > 1800) {
       alert('请检查 RPE 和休息时间，休息时间应为 0-1800 秒');
       return;
     }
-    if (isCardio) {
-      if (!Number.isFinite(duration) || duration <= 0 || !Number.isFinite(distance) || distance < 0) {
-        alert('有氧时间必须大于 0，距离不能为负数');
+    if (mode === 'distance_time' || mode === 'swim') {
+      if (measuredDurationSeconds <= 0 || !Number.isFinite(distance) || distance <= 0) {
+        alert('该运动需要填写大于 0 的时间和距离');
         return;
       }
-    } else if (!Number.isFinite(weight) || weight < 0 || !Number.isInteger(reps) || reps <= 0 || reps > 100) {
+    } else if (mode === 'time_level' && (measuredDurationSeconds <= 0 || level < 0)) {
+      alert('请填写有效的运动时间和等级/阻力');
+      return;
+    } else if (mode === 'timed_hold' && (measuredDurationSeconds <= 0 || weight < 0)) {
+      alert('请填写有效的保持时间，额外负重不能为负数');
+      return;
+    } else if (mode === 'interval' && (workSeconds <= 0 || recoverySeconds < 0 || intervals <= 0)) {
+      alert('请填写有效的工作时间、恢复时间和轮数');
+      return;
+    } else if ((mode === 'weight_reps' || mode === 'bodyweight_reps') && (!Number.isFinite(weight) || weight < 0 || !Number.isInteger(reps) || reps <= 0 || reps > 100)) {
       alert('重量不能为负数，次数应为 1-100 的整数');
       return;
     }
@@ -201,18 +248,40 @@ export function WorkoutPage() {
       sessionId: activeSession.id,
       exerciseId: selectedExId,
       setNumber,
-      weight: isCardio ? 0 : weight,
-      reps: isCardio ? 0 : reps,
-      duration: isCardio ? duration : undefined,
-      distance: isCardio ? distance : undefined,
+      weight: ['weight_reps', 'bodyweight_reps', 'timed_hold'].includes(mode) ? weight : 0,
+      reps: ['weight_reps', 'bodyweight_reps'].includes(mode) ? reps : 0,
+      duration: ['timed_hold', 'distance_time', 'time_level', 'swim'].includes(mode) ? measuredDurationSeconds / 60 : undefined,
+      distance: ['distance_time', 'swim'].includes(mode) ? distance : undefined,
+      durationSeconds: ['timed_hold', 'distance_time', 'time_level', 'swim'].includes(mode) ? measuredDurationSeconds : undefined,
+      distanceMeters: ['distance_time', 'swim'].includes(mode) ? Math.round(distance * 1000) : undefined,
+      setKind,
+      level: mode === 'time_level' ? level : undefined,
+      incline: mode === 'distance_time' && incline > 0 ? incline : undefined,
+      heartRate: heartRate > 0 ? heartRate : undefined,
+      cadence: mode === 'distance_time' && cadence > 0 ? cadence : undefined,
+      strokeRate: currentEx.name === '划船机' && strokeRate > 0 ? strokeRate : undefined,
+      poolLengthMeters: mode === 'swim' ? poolLengthMeters : undefined,
+      swimStroke: mode === 'swim' ? swimStroke : undefined,
+      workSeconds: mode === 'interval' ? workSeconds : undefined,
+      recoverySeconds: mode === 'interval' ? recoverySeconds : undefined,
+      intervals: mode === 'interval' ? intervals : undefined,
+      loadType: ['weight_reps', 'bodyweight_reps', 'timed_hold'].includes(mode) ? loadTypeOverride : undefined,
       rpe,
       completed: true
     });
 
     setIsDoingSet(false);
-    // 触发休息倒计时
-    setRestEndTime(Date.now() + selectedRestTime * 1000);
-    setRestTimeLeft(selectedRestTime);
+    setSetStartedAt(null);
+    setActiveSetSeconds(0);
+    const needsRest = ['weight_reps', 'bodyweight_reps', 'timed_hold'].includes(mode) && selectedRestTime > 0;
+    if (needsRest) {
+      if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission().catch(console.error);
+      setRestEndTime(Date.now() + selectedRestTime * 1000);
+      setRestTimeLeft(selectedRestTime);
+    } else {
+      setRestEndTime(null);
+      setRestTimeLeft(0);
+    }
   };
 
   const handleSkipRest = () => {
@@ -231,15 +300,36 @@ export function WorkoutPage() {
   const plannedIds = sessionTemplate?.exercises
     ? [...sessionTemplate.exercises].sort((a, b) => a.order - b.order).map(item => item.exerciseId)
     : sessionTemplate?.exerciseIds;
-  const sessionExercises = sessionTemplate && !showAllExercises
-    ? (plannedIds || []).map(id => allExercises.find(ex => ex.id === id)).filter(ex => ex !== undefined)
+  const selectedBaseExercise = allExercises.find(e => e.id === selectedExId);
+  const similarityScore = (exercise: typeof allExercises[number]) => {
+    if (!selectedBaseExercise) return 0;
+    let score = 0;
+    if (exercise.movementPattern && exercise.movementPattern === selectedBaseExercise.movementPattern) score += 4;
+    if (exercise.primaryMuscles?.some(muscle => selectedBaseExercise.primaryMuscles?.includes(muscle))) score += 3;
+    if (exercise.equipment && exercise.equipment === selectedBaseExercise.equipment) score += 1;
+    if (exercise.recordingMode === selectedBaseExercise.recordingMode) score += 1;
+    return score;
+  };
+  const similarExercises = allExercises.filter(exercise => exercise.id === selectedExId || similarityScore(exercise) >= 3).toSorted((a, b) => similarityScore(b) - similarityScore(a));
+  const sessionExercises = sessionTemplate
+    ? showAllExercises
+      ? similarExercises
+      : (plannedIds || []).map(id => allExercises.find(ex => ex.id === id)).filter(ex => ex !== undefined)
     : allExercises;
 
-  const currentEx = allExercises.find(e => e.id === selectedExId);
+  const currentEx = selectedBaseExercise;
   const isCardio = currentEx?.type === 'cardio';
+  const recordingMode = currentEx?.recordingMode || (isCardio ? 'distance_time' : 'weight_reps');
   const currentPlan = sessionTemplate?.exercises?.find(item => item.exerciseId === selectedExId);
+  const currentPlanText = currentPlan ? (() => {
+    if (recordingMode === 'timed_hold') return `目标 ${currentPlan.targetSets} 组 × ${Math.round((currentPlan.targetDurationSeconds || 0) / 60)} 分钟`;
+    if (recordingMode === 'distance_time') return `目标 ${((currentPlan.targetDistanceMeters || 0) / 1000).toFixed(1)} km / ${Math.round((currentPlan.targetDurationSeconds || 0) / 60)} 分钟`;
+    if (recordingMode === 'swim') return `目标 ${currentPlan.targetDistanceMeters || 0} m / ${Math.round((currentPlan.targetDurationSeconds || 0) / 60)} 分钟`;
+    if (recordingMode === 'time_level') return `目标 ${Math.round((currentPlan.targetDurationSeconds || 0) / 60)} 分钟 · 等级 ${currentPlan.targetLevel || 0}`;
+    return `目标 ${currentPlan.targetSets} 组 × ${currentPlan.minReps}-${currentPlan.maxReps} 次 @ RPE ${currentPlan.targetRpe || 8}`;
+  })() : '';
   const completedForTemplate = sessionTemplate?.exercises?.filter(item =>
-    (currentSets || []).filter(set => set.exerciseId === item.exerciseId).length >= item.targetSets
+    (currentSets || []).filter(set => set.exerciseId === item.exerciseId && setMeetsPlan(set, item, allExercises.find(exercise => exercise.id === item.exerciseId))).length >= item.targetSets
   ).length || 0;
 
   useEffect(() => {
@@ -254,15 +344,26 @@ export function WorkoutPage() {
   }, [activeSession]);
 
   const applyLastPerformance = () => {
-    const last = lastExerciseSets?.sets.at(-1);
+    const last = lastExerciseSets?.sets.toSorted((a, b) => a.setNumber - b.setNumber).at(-1);
     if (!last) return;
-    if (isCardio) {
-      setDuration(last.duration || 20);
-      setDistance(last.distance || 0);
-    } else {
+    if (recordingMode === 'weight_reps' || recordingMode === 'bodyweight_reps') {
       setWeight(last.weight);
       setReps(last.reps);
     }
+    if (['timed_hold', 'distance_time', 'time_level', 'swim'].includes(recordingMode)) {
+      const seconds = getDurationSeconds(last);
+      setDuration(Math.floor(seconds / 60));
+      setDurationRemainderSeconds(seconds % 60);
+    }
+    if (recordingMode === 'distance_time' || recordingMode === 'swim') setDistance(getDistanceMeters(last) / 1000);
+    if (last.level !== undefined) setLevel(last.level);
+    if (last.incline !== undefined) setIncline(last.incline);
+    if (last.heartRate !== undefined) setHeartRate(last.heartRate);
+    if (last.cadence !== undefined) setCadence(last.cadence);
+    if (last.strokeRate !== undefined) setStrokeRate(last.strokeRate);
+    if (last.poolLengthMeters !== undefined) setPoolLengthMeters(last.poolLengthMeters);
+    if (last.swimStroke) setSwimStroke(last.swimStroke);
+    if (last.loadType) setLoadTypeOverride(last.loadType);
     if (last.rpe) setRpe(last.rpe);
   };
 
@@ -272,7 +373,12 @@ export function WorkoutPage() {
       const timer = setTimeout(() => {
         const first = sessionExercises[0];
         setSelectedExId(first.id!);
+        setLoadTypeOverride(first.loadType || 'external');
         if (first.loadType === 'bodyweight' || first.loadType === 'bodyweight-added' || first.loadType === 'assisted') setWeight(0);
+        if (first.recordingMode === 'timed_hold') {
+          setDuration(1);
+          setDurationRemainderSeconds(0);
+        }
       }, 0);
       return () => clearTimeout(timer);
     }
@@ -281,58 +387,53 @@ export function WorkoutPage() {
   // 渐进性超负荷建议渲染
   const renderOverloadSuggestion = () => {
     if (!lastExerciseSets || lastExerciseSets.sets.length === 0) return null;
-    
-    const { sessionDate, sets: pastSets } = lastExerciseSets;
-    const currentEx = allExercises.find(e => e.id === selectedExId);
-    const isCardio = currentEx?.type === 'cardio';
-
-    if (isCardio) {
-      let bestSet = pastSets[0];
-      for (const s of pastSets) {
-        if ((s.duration || 0) > (bestSet.duration || 0)) {
-          bestSet = s;
-        }
-      }
-
-      const dateStr = new Date(sessionDate).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' });
-      const nextDuration = (bestSet.duration || 20) + 1;
-      const nextDistance = parseFloat(((bestSet.distance || 2.0) + 0.2).toFixed(1));
-
-      return (
-        <div style={{
-          backgroundColor: 'var(--surface-color)',
-          padding: '12px 16px',
-          borderRadius: '12px',
-          border: '1px dashed var(--primary-color)',
-          marginBottom: '20px',
-          fontSize: '13px',
-          lineHeight: 1.5
-        }}>
-          <div style={{ fontWeight: 'bold', color: 'var(--primary-color)', display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
-            <span>📈 渐进性超负荷建议</span>
-          </div>
-          <div style={{ opacity: 0.8 }}>
-            上次成绩 ({dateStr}): <strong style={{ color: 'var(--text-color)' }}>{bestSet.duration} 分钟 | {bestSet.distance || 0} km</strong>
-            {bestSet.rpe ? ` @ RPE ${bestSet.rpe}` : ''}。
-          </div>
-          <div style={{ marginTop: '6px', color: 'var(--success-color)', fontWeight: '500' }}>
-            今日目标推荐：尝试 <span style={{ textDecoration: 'underline' }}>{nextDuration} 分钟</span> 或 <span style={{ textDecoration: 'underline' }}>{nextDistance} km</span>！
-          </div>
-        </div>
-      );
-    }
-
+    const currentExercise = allExercises.find(exercise => exercise.id === selectedExId);
+    if (!currentExercise) return null;
+    const { sessionDate } = lastExerciseSets;
+    const pastSets = lastExerciseSets.sets.filter(set => (set.setKind || 'working') === 'working');
+    if (pastSets.length === 0) return null;
     let bestSet = pastSets[0];
-    for (const s of pastSets) {
-      if (s.weight > bestSet.weight || (s.weight === bestSet.weight && s.reps > bestSet.reps)) {
-        bestSet = s;
+    let suggestion: string;
+
+    if (recordingMode === 'distance_time' || recordingMode === 'swim') {
+      const fixedDistance = (currentPlan?.targetDistanceMeters || 0) > 0;
+      if (fixedDistance) {
+        bestSet = pastSets.reduce((best, set) => (paceSecondsPerKm(set) || Infinity) < (paceSecondsPerKm(best) || Infinity) ? set : best);
+        const pace = paceSecondsPerKm(bestSet);
+        suggestion = bestSet.rpe && bestSet.rpe >= 9
+          ? `上次强度较高，保持相同距离和约 ${formatPace(pace)} 的配速。`
+          : `保持 ${(getDistanceMeters(bestSet) / 1000).toFixed(2)} km，将完成时间尝试缩短约 1%。`;
+      } else {
+        bestSet = pastSets.reduce((best, set) => getDistanceMeters(set) > getDistanceMeters(best) ? set : best);
+        suggestion = bestSet.rpe && bestSet.rpe >= 9
+          ? '上次强度较高，本次维持相同时间和距离。'
+          : `保持 ${formatDuration(getDurationSeconds(bestSet))}，尝试增加约 ${Math.max(50, Math.round(getDistanceMeters(bestSet) * 0.02 / 10) * 10)} 米。`;
       }
+    } else if (recordingMode === 'time_level') {
+      bestSet = pastSets.reduce((best, set) => (set.level || 0) > (best.level || 0) ? set : best);
+      suggestion = bestSet.rpe && bestSet.rpe >= 9 ? '维持上次时间和等级。' : `维持 ${formatDuration(getDurationSeconds(bestSet))}，尝试将等级提高到 ${(bestSet.level || 0) + 1}。`;
+    } else if (recordingMode === 'timed_hold') {
+      bestSet = pastSets.reduce((best, set) => getDurationSeconds(set) > getDurationSeconds(best) ? set : best);
+      suggestion = bestSet.rpe && bestSet.rpe >= 9 ? '维持上次保持时间。' : `尝试保持 ${formatDuration(getDurationSeconds(bestSet) + 5)}，或在时间不变时小幅增加负重。`;
+    } else if (recordingMode === 'interval') {
+      bestSet = pastSets.reduce((best, set) => (set.intervals || 0) > (best.intervals || 0) ? set : best);
+      suggestion = bestSet.rpe && bestSet.rpe >= 9 ? '维持上次轮数和工作/恢复比例。' : `尝试增加到 ${(bestSet.intervals || 0) + 1} 轮，工作和恢复时间保持不变。`;
+    } else if ((bestSet.loadType || currentExercise.loadType) === 'assisted') {
+      bestSet = pastSets.reduce((best, set) => set.weight < best.weight || (set.weight === best.weight && set.reps > best.reps) ? set : best);
+      suggestion = bestSet.rpe && bestSet.rpe >= 9 ? '维持当前辅助重量。' : `尝试把辅助重量从 ${bestSet.weight} kg 降到 ${Math.max(0, bestSet.weight - 2.5)} kg，次数保持不变。`;
+    } else {
+      bestSet = pastSets.reduce((best, set) => effectiveLoad(set, currentExercise, activeSession?.bodyWeight || profile?.weight || 70) > effectiveLoad(best, currentExercise, activeSession?.bodyWeight || profile?.weight || 70) ? set : best);
+      const ready = !bestSet.rpe || bestSet.rpe <= 8;
+      const maxReps = currentPlan?.maxReps || 12;
+      const increment = currentExercise.weightInputMode === 'per_implement' ? 1 : 2.5;
+      suggestion = !ready
+        ? '上次强度较高，优先稳定完成相同重量和次数。'
+        : bestSet.reps >= maxReps
+          ? `已达到次数上限，尝试把${currentExercise.weightInputMode === 'per_implement' ? '单只' : ''}重量提高到 ${bestSet.weight + increment} kg，并回到次数区间下限。`
+          : `重量保持 ${bestSet.weight} kg，尝试完成 ${bestSet.reps + 1} 次。`;
     }
 
     const dateStr = new Date(sessionDate).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' });
-    const nextWeight = bestSet.weight + 2.5;
-    const nextReps = bestSet.reps + 1;
-    const readyToProgress = !bestSet.rpe || bestSet.rpe <= 8;
 
     return (
       <div style={{
@@ -348,13 +449,11 @@ export function WorkoutPage() {
           <span>📈 渐进性超负荷建议</span>
         </div>
         <div style={{ opacity: 0.8 }}>
-          上次成绩 ({dateStr}): <strong style={{ color: 'var(--text-color)' }}>{bestSet.weight} kg × {bestSet.reps} 次</strong>
+          上次成绩 ({dateStr}): <strong style={{ color: 'var(--text-color)' }}>{formatRecordedSet(bestSet, currentExercise)}</strong>
           {bestSet.rpe ? ` @ RPE ${bestSet.rpe}` : ''}。
         </div>
         <div style={{ marginTop: '6px', color: 'var(--success-color)', fontWeight: '500' }}>
-          {readyToProgress ? <>
-            今日目标推荐：尝试 <span style={{ textDecoration: 'underline' }}>{nextWeight} kg × {bestSet.reps} 次</span> 或 <span style={{ textDecoration: 'underline' }}>{bestSet.weight} kg × {nextReps} 次</span>！
-          </> : <>上次强度较高，今日优先稳定完成相同重量与次数，不建议盲目加重。</>}
+          今日建议：{suggestion}
         </div>
       </div>
     );
@@ -368,7 +467,6 @@ export function WorkoutPage() {
     if (exSets.length === 0) return null;
 
     const currentEx = allExercises.find(e => e.id === selectedExId);
-    const isCardio = currentEx?.type === 'cardio';
 
     const handleDeleteSet = async (setId: number) => {
       if (confirm('确定删除这一组记录吗？')) {
@@ -388,23 +486,9 @@ export function WorkoutPage() {
               fontSize: '14px'
             }}>
               <span style={{ opacity: 0.6, width: '40px' }}>组 {idx + 1}</span>
-              {isCardio ? (
-                <>
-                  <span style={{ fontWeight: 'bold', width: '70px', textAlign: 'center' }}>{set.duration} 分钟</span>
-                  <span style={{ fontWeight: 'bold', width: '70px', textAlign: 'center' }}>{set.distance || 0} km</span>
-                </>
-              ) : (
-                <>
-                  <span style={{ fontWeight: 'bold', width: '90px', textAlign: 'center' }}>
-                    {currentEx?.loadType === 'bodyweight-added'
-                      ? (set.weight > 0 ? `自重+${set.weight}kg` : '自重')
-                      : currentEx?.loadType === 'assisted' ? `辅助${set.weight}kg` : `${set.weight} kg`}
-                  </span>
-                  <span style={{ fontWeight: 'bold', width: '70px', textAlign: 'center' }}>{set.reps} 次</span>
-                </>
-              )}
-              <span style={{ opacity: 0.7, fontSize: '13px', width: '60px', textAlign: 'center' }}>
-                {set.rpe ? `@ RPE ${set.rpe}` : ''}
+              <span style={{ flex: 1, fontWeight: 'bold', textAlign: 'center' }}>{formatRecordedSet(set, currentEx)}</span>
+              <span style={{ opacity: 0.7, fontSize: '12px', textAlign: 'center' }}>
+                {set.setKind ? SET_KIND_LABELS[set.setKind] : '工作'}{set.rpe ? ` · RPE ${set.rpe}` : ''}
               </span>
               <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                 <span style={{ color: 'var(--success-color)' }}><Check size={18}/></span>
@@ -556,7 +640,14 @@ export function WorkoutPage() {
               const plan = sessionTemplate?.exercises?.find(item => item.exerciseId === id);
               if (plan) setSelectedRestTime(plan.restSeconds);
               const exercise = allExercises.find(item => item.id === id);
-              if (exercise?.loadType === 'bodyweight' || exercise?.loadType === 'bodyweight-added' || exercise?.loadType === 'assisted') setWeight(0);
+              if (exercise) {
+                setLoadTypeOverride(exercise.loadType || 'external');
+                if (exercise.loadType === 'bodyweight' || exercise.loadType === 'bodyweight-added' || exercise.loadType === 'assisted') setWeight(0);
+                if (exercise.recordingMode === 'timed_hold') {
+                  setDuration(1);
+                  setDurationRemainderSeconds(0);
+                }
+              }
             }}
             style={{ 
               flex: 1, minWidth: 0, padding: '12px', fontSize: '16px', 
@@ -576,7 +667,7 @@ export function WorkoutPage() {
         </div>
         {(currentPlan || lastExerciseSets?.sets.length) && (
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px', fontSize: '12px', opacity: 0.8 }}>
-            <span>{currentPlan ? `目标 ${currentPlan.targetSets} 组 × ${currentPlan.minReps}-${currentPlan.maxReps} 次 @ RPE ${currentPlan.targetRpe || 8}` : '临时替换动作'}</span>
+            <span>{currentPlan ? currentPlanText : '临时替换动作'}</span>
             {lastExerciseSets?.sets.length ? (
               <button onClick={applyLastPerformance} style={{ display: 'flex', alignItems: 'center', gap: '4px', border: 'none', background: 'none', color: 'var(--primary-color)', cursor: 'pointer' }}>
                 <RefreshCw size={13} /> 套用上次
@@ -589,130 +680,51 @@ export function WorkoutPage() {
       {/* 渐进性超负荷建议 */}
       {renderOverloadSuggestion()}
 
-      {/* 极简大按钮录入区域 */}
-      <div style={{ display: 'flex', gap: '12px', marginBottom: '24px' }}>
-        {isCardio ? (
-          <>
-            {/* 时间 (分钟) */}
-            <div style={{ flex: 1, backgroundColor: 'var(--surface-color)', padding: '16px 8px', borderRadius: '12px', textAlign: 'center' }}>
-              <div style={{ fontSize: '14px', marginBottom: '8px', opacity: 0.8 }}>时间 (分钟)</div>
-              <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '4px' }}>
-                <button onClick={() => setDuration(d => Math.max(1, d - 1))} style={btnStyle}><Minus size={16}/></button>
-                <input
-                  type="number"
-                  value={duration === 0 ? '' : duration}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    setDuration(val === '' ? 0 : parseInt(val, 10));
-                  }}
-                  style={{
-                    fontSize: '20px',
-                    fontWeight: 'bold',
-                    width: '60px',
-                    textAlign: 'center',
-                    border: 'none',
-                    background: 'transparent',
-                    color: 'var(--text-color)',
-                    outline: 'none',
-                    padding: 0
-                  }}
-                />
-                <button onClick={() => setDuration(d => d + 1)} style={btnStyle}><Plus size={16}/></button>
-              </div>
-            </div>
-
-            {/* 距离 (km) */}
-            <div style={{ flex: 1, backgroundColor: 'var(--surface-color)', padding: '16px 8px', borderRadius: '12px', textAlign: 'center' }}>
-              <div style={{ fontSize: '14px', marginBottom: '8px', opacity: 0.8 }}>距离 (km)</div>
-              <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '4px' }}>
-                <button onClick={() => setDistance(d => Math.max(0, parseFloat((d - 0.1).toFixed(1))))} style={btnStyle}><Minus size={16}/></button>
-                <input
-                  type="number"
-                  step="0.1"
-                  value={distance === 0 ? '' : distance}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    setDistance(val === '' ? 0 : parseFloat(val));
-                  }}
-                  style={{
-                    fontSize: '20px',
-                    fontWeight: 'bold',
-                    width: '60px',
-                    textAlign: 'center',
-                    border: 'none',
-                    background: 'transparent',
-                    color: 'var(--text-color)',
-                    outline: 'none',
-                    padding: 0
-                  }}
-                />
-                <button onClick={() => setDistance(d => parseFloat((d + 0.1).toFixed(1)))} style={btnStyle}><Plus size={16}/></button>
-              </div>
-            </div>
-          </>
-        ) : (
-          <>
-            {/* 重量 */}
-            <div style={{ flex: 1, backgroundColor: 'var(--surface-color)', padding: '16px 8px', borderRadius: '12px', textAlign: 'center' }}>
-              <div style={{ fontSize: '14px', marginBottom: '8px', opacity: 0.8 }}>
-                {currentEx?.loadType === 'bodyweight-added' ? '额外负重 (kg)' : currentEx?.loadType === 'assisted' ? '辅助重量 (kg)' : '重量 (kg)'}
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '4px' }}>
-                <button onClick={() => setWeight(w => Math.max(0, w - 2.5))} style={btnStyle}><Minus size={16}/></button>
-                <input
-                  type="number"
-                  step="any"
-                  value={weight === 0 ? '' : weight}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    setWeight(val === '' ? 0 : parseFloat(val));
-                  }}
-                  style={{
-                    fontSize: '20px',
-                    fontWeight: 'bold',
-                    width: '60px',
-                    textAlign: 'center',
-                    border: 'none',
-                    background: 'transparent',
-                    color: 'var(--text-color)',
-                    outline: 'none',
-                    padding: 0
-                  }}
-                />
-                <button onClick={() => setWeight(w => w + 2.5)} style={btnStyle}><Plus size={16}/></button>
-              </div>
-            </div>
-
-            {/* 次数 */}
-            <div style={{ flex: 1, backgroundColor: 'var(--surface-color)', padding: '16px 8px', borderRadius: '12px', textAlign: 'center' }}>
-              <div style={{ fontSize: '14px', marginBottom: '8px', opacity: 0.8 }}>次数 (reps)</div>
-              <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '4px' }}>
-                <button onClick={() => setReps(r => Math.max(0, r - 1))} style={btnStyle}><Minus size={16}/></button>
-                <input
-                  type="number"
-                  value={reps === 0 ? '' : reps}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    setReps(val === '' ? 0 : parseInt(val, 10));
-                  }}
-                  style={{
-                    fontSize: '20px',
-                    fontWeight: 'bold',
-                    width: '60px',
-                    textAlign: 'center',
-                    border: 'none',
-                    background: 'transparent',
-                    color: 'var(--text-color)',
-                    outline: 'none',
-                    padding: 0
-                  }}
-                />
-                <button onClick={() => setReps(r => r + 1)} style={btnStyle}><Plus size={16}/></button>
-              </div>
-            </div>
-          </>
-        )}
+      {/* 根据动作记录模式呈现对应指标 */}
+      {(recordingMode === 'bodyweight_reps' || recordingMode === 'timed_hold') && (
+        <div style={{ display: 'flex', gap: '6px', marginBottom: '10px' }}>
+          {(['bodyweight-added', 'assisted'] as const).map(mode => (
+            <button key={mode} onClick={() => { setLoadTypeOverride(mode); setWeight(0); }} style={{ flex: 1, padding: '8px', borderRadius: '8px', border: `1px solid ${loadTypeOverride === mode ? 'var(--primary-color)' : 'var(--border-color)'}`, background: loadTypeOverride === mode ? 'var(--primary-color)' : 'var(--surface-color)', color: loadTypeOverride === mode ? '#fff' : 'var(--text-color)' }}>
+              {mode === 'assisted' ? '辅助模式' : '自重/负重模式'}
+            </button>
+          ))}
+        </div>
+      )}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '12px', marginBottom: '12px' }}>
+        {(recordingMode === 'weight_reps' || recordingMode === 'bodyweight_reps') && <>
+          <MetricControl label={loadTypeOverride === 'assisted' ? '辅助重量' : loadTypeOverride === 'bodyweight-added' ? '额外负重' : currentEx?.weightInputMode === 'per_implement' ? '单只重量' : '总重量'} value={weight} step={2.5} suffix="kg" onChange={setWeight} />
+          <MetricControl label={currentEx?.weightInputMode === 'per_implement' ? '每侧次数' : '次数'} value={reps} step={1} suffix="次" onChange={setReps} />
+        </>}
+        {recordingMode === 'timed_hold' && <>
+          <MetricControl label="分钟" value={duration} step={1} suffix="分" onChange={setDuration} />
+          <MetricControl label="秒" value={durationRemainderSeconds} step={5} max={59} suffix="秒" onChange={setDurationRemainderSeconds} />
+          <MetricControl label={loadTypeOverride === 'assisted' ? '辅助重量' : '额外负重'} value={weight} step={2.5} suffix="kg" onChange={setWeight} />
+        </>}
+        {(recordingMode === 'distance_time' || recordingMode === 'swim' || recordingMode === 'time_level') && <>
+          <MetricControl label="分钟" value={duration} step={1} suffix="分" onChange={setDuration} />
+          <MetricControl label="秒" value={durationRemainderSeconds} step={5} max={59} suffix="秒" onChange={setDurationRemainderSeconds} />
+        </>}
+        {recordingMode === 'distance_time' && <MetricControl label="距离" value={distance} step={0.1} suffix="km" onChange={setDistance} />}
+        {recordingMode === 'swim' && <MetricControl label="距离" value={Math.round(distance * 1000)} step={25} suffix="m" onChange={value => setDistance(value / 1000)} />}
+        {recordingMode === 'time_level' && <MetricControl label="等级/阻力" value={level} step={1} onChange={setLevel} />}
+        {recordingMode === 'interval' && <>
+          <MetricControl label="工作" value={workSeconds} step={5} suffix="秒" onChange={setWorkSeconds} />
+          <MetricControl label="恢复" value={recoverySeconds} step={5} suffix="秒" onChange={setRecoverySeconds} />
+          <MetricControl label="轮数" value={intervals} step={1} suffix="轮" onChange={setIntervals} />
+        </>}
       </div>
+      {(recordingMode === 'distance_time' || recordingMode === 'time_level' || recordingMode === 'swim') && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '8px', marginBottom: '20px' }}>
+          <CompactMetric label="平均心率" value={heartRate} onChange={setHeartRate} suffix="bpm" />
+          {currentEx?.name.includes('跑步') && <CompactMetric label="坡度" value={incline} onChange={setIncline} suffix="%" />}
+          {(currentEx?.name.includes('单车') || currentEx?.name.includes('跑步')) && <CompactMetric label="踏频/步频" value={cadence} onChange={setCadence} suffix="spm" />}
+          {currentEx?.name === '划船机' && <CompactMetric label="桨频" value={strokeRate} onChange={setStrokeRate} suffix="spm" />}
+          {recordingMode === 'swim' && <>
+            <CompactMetric label="泳池长度" value={poolLengthMeters} onChange={setPoolLengthMeters} suffix="m" />
+            <label style={{ fontSize: '11px' }}>泳姿<select value={swimStroke} onChange={event => setSwimStroke(event.target.value)} style={{ width: '100%', padding: '8px', borderRadius: '6px', background: 'var(--surface-color)', color: 'var(--text-color)', border: '1px solid var(--border-color)' }}><option>自由泳</option><option>蛙泳</option><option>仰泳</option><option>蝶泳</option><option>混合泳</option></select></label>
+          </>}
+        </div>
+      )}
 
       {/* 状态控制按钮 */}
       {isResting ? (
@@ -730,6 +742,21 @@ export function WorkoutPage() {
         </button>
       ) : isDoingSet ? (
         <div style={{ marginBottom: '24px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface-color)', padding: '9px 12px', borderRadius: '8px', marginBottom: '10px', fontSize: '13px' }}>
+            <span>本组已进行 <strong>{formatDuration(activeSetSeconds)}</strong></span>
+            {['timed_hold', 'distance_time', 'time_level', 'swim'].includes(recordingMode) && (
+              <button onClick={() => { setDuration(Math.floor(activeSetSeconds / 60)); setDurationRemainderSeconds(activeSetSeconds % 60); }} style={{ border: 'none', background: 'none', color: 'var(--primary-color)', fontWeight: 'bold' }}>使用计时</button>
+            )}
+          </div>
+          {!isCardio && (
+            <div style={{ display: 'flex', gap: '6px', marginBottom: '12px' }}>
+              {([['warmup', '热身'], ['working', '工作'], ['drop', '递减'], ['failure', '力竭']] as const).map(([kind, label]) => (
+                <button key={kind} onClick={() => setSetKind(kind)} style={{ flex: 1, padding: '8px 2px', borderRadius: '8px', border: `1px solid ${setKind === kind ? 'var(--primary-color)' : 'var(--border-color)'}`, background: setKind === kind ? 'var(--primary-color)' : 'var(--surface-color)', color: setKind === kind ? '#fff' : 'var(--text-color)', fontSize: '12px' }}>
+                  {label}组
+                </button>
+              ))}
+            </div>
+          )}
           {/* RPE 录入 */}
           <div style={{ marginBottom: '16px', backgroundColor: 'var(--surface-color)', padding: '12px 16px', borderRadius: '12px', border: '1px solid var(--border-color)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
@@ -871,3 +898,30 @@ const btnStyle = {
   cursor: 'pointer', color: 'var(--text-color)',
   flexShrink: 0
 };
+
+function MetricControl({ label, value, onChange, step, max, suffix }: { label: string; value: number; onChange: (value: number) => void; step: number; max?: number; suffix?: string }) {
+  const clamp = (next: number) => Math.min(max ?? Number.POSITIVE_INFINITY, Math.max(0, next));
+  return (
+    <div style={{ backgroundColor: 'var(--surface-color)', padding: '14px 6px', borderRadius: '12px', textAlign: 'center' }}>
+      <div style={{ fontSize: '13px', marginBottom: '8px', opacity: 0.8 }}>{label}</div>
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '4px' }}>
+        <button aria-label={`减少${label}`} onClick={() => onChange(clamp(Number((value - step).toFixed(2))))} style={btnStyle}><Minus size={16} /></button>
+        <input type="number" step={step} value={value || ''} onChange={event => onChange(clamp(Number(event.target.value) || 0))} style={{ fontSize: '19px', fontWeight: 'bold', width: '58px', textAlign: 'center', border: 'none', background: 'transparent', color: 'var(--text-color)', outline: 'none', padding: 0 }} />
+        <button aria-label={`增加${label}`} onClick={() => onChange(clamp(Number((value + step).toFixed(2))))} style={btnStyle}><Plus size={16} /></button>
+      </div>
+      {suffix && <div style={{ fontSize: '10px', opacity: 0.55 }}>{suffix}</div>}
+    </div>
+  );
+}
+
+function CompactMetric({ label, value, onChange, suffix }: { label: string; value: number; onChange: (value: number) => void; suffix: string }) {
+  return (
+    <label style={{ fontSize: '11px', opacity: 0.8 }}>
+      {label}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
+        <input type="number" min={0} value={value || ''} onChange={event => onChange(Math.max(0, Number(event.target.value) || 0))} style={{ width: '100%', minWidth: 0, padding: '8px 5px', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--surface-color)', color: 'var(--text-color)' }} />
+        <span>{suffix}</span>
+      </div>
+    </label>
+  );
+}

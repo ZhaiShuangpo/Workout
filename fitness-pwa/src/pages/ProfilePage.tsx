@@ -1,7 +1,7 @@
 import { useMemo, useState, useEffect } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, type WorkoutSession, type WorkoutSet, type WorkoutTemplate, type Exercise } from '../db';
-import { estimatedOneRepMax, setVolume } from '../domain/fitness';
+import { estimatedOneRepMax, formatDuration, formatPace, formatRecordedSet, getDistanceMeters, getDurationSeconds, paceSecondsPerKm, SET_KIND_LABELS, setVolume } from '../domain/fitness';
 import { downloadBackup, restoreBackup } from '../domain/backup';
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { Activity, Calendar, Zap, Trash2, ChevronDown, ChevronUp, TrendingUp, Flame, Scale, Download, Upload, Moon, Sun } from 'lucide-react';
@@ -104,21 +104,8 @@ function SessionCard({ session, sets, templates, exercises, bodyWeight }: { sess
                 {setsArray.map((set, idx) => (
                   <div key={set.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', opacity: 0.8, padding: '4px 0', borderBottom: idx === setsArray.length - 1 ? 'none' : '1px solid var(--border-color)' }}>
                     <span>第 {idx + 1} 组</span>
-                    {isCardio ? (
-                      <>
-                        <span>{set.duration || 0} 分钟</span>
-                        <span>{set.distance || 0} km{set.rpe ? ` @ RPE ${set.rpe}` : ''}</span>
-                      </>
-                    ) : (
-                      <>
-                        <span>{exercise?.loadType === 'bodyweight-added'
-                          ? (set.weight > 0 ? `自重 + ${set.weight} kg` : '自重')
-                          : exercise?.loadType === 'assisted'
-                            ? `辅助 ${set.weight} kg`
-                            : `${set.weight} kg`}</span>
-                        <span>{set.reps} 次{set.rpe ? ` @ RPE ${set.rpe}` : ''}</span>
-                      </>
-                    )}
+                    <span style={{ flex: 1, textAlign: 'center' }}>{formatRecordedSet(set, exercise)}</span>
+                    <span>{!isCardio && (set.setKind ? SET_KIND_LABELS[set.setKind] : '工作')}{set.rpe ? ` · RPE ${set.rpe}` : ''}</span>
                   </div>
                 ))}
               </div>
@@ -160,11 +147,24 @@ export function ProfilePage() {
 
   const [chartType, setChartType] = useState<'volume' | '1rm'>('volume');
   const [selectedExerciseId, setSelectedExerciseId] = useState<number>(0);
+  const [selectedCardioId, setSelectedCardioId] = useState<number>(0);
 
   // Body metrics queries
   const bodyMetrics = useLiveQuery(() => db.bodyMetrics.orderBy('date').reverse().toArray());
   const bodyMetricsList = useMemo(() => bodyMetrics || [], [bodyMetrics]);
   const bodyWeight = bodyMetricsList[0]?.weight || profile?.weight || 70;
+  const sessionBodyWeights = useMemo(() => {
+    const result = new Map<number, number>();
+    if (!sessions) return result;
+    const metrics = [...bodyMetricsList].sort((a, b) => a.date.getTime() - b.date.getTime());
+    for (const session of sessions) {
+      if (session.id === undefined) continue;
+      const sessionTime = new Date(session.startTime).getTime();
+      const historical = metrics.filter(metric => new Date(metric.date).getTime() <= sessionTime).at(-1);
+      result.set(session.id, session.bodyWeight ?? historical?.weight ?? bodyWeight);
+    }
+    return result;
+  }, [sessions, bodyMetricsList, bodyWeight]);
 
   const [inputWeight, setInputWeight] = useState<string>('');
   const [inputBodyFat, setInputBodyFat] = useState<string>('');
@@ -341,11 +341,48 @@ export function ProfilePage() {
     for (const set of sets) {
       if (!recentSessionIds.has(set.sessionId)) continue;
       const exercise = exercises.find(item => item.id === set.exerciseId);
-      if (!exercise || exercise.type === 'cardio') continue;
-      counts.set(exercise.muscleGroup, (counts.get(exercise.muscleGroup) || 0) + 1);
+      if (!exercise || exercise.type === 'cardio' || (set.setKind || 'working') !== 'working') continue;
+      const primary = exercise.primaryMuscles?.length ? exercise.primaryMuscles : [exercise.muscleGroup.split('/')[0]];
+      const secondary = exercise.secondaryMuscles || exercise.muscleGroup.split('/').slice(1);
+      for (const muscle of primary) counts.set(muscle, (counts.get(muscle) || 0) + 1);
+      for (const muscle of secondary) counts.set(muscle, (counts.get(muscle) || 0) + 0.5);
     }
     return [...counts.entries()].sort((a, b) => b[1] - a[1]);
   }, [sessions, sets, exercises]);
+
+  const cardioSummary = useMemo(() => {
+    if (!sessions || !sets || !exercises) return [];
+    const recentSessionIds = new Set(sessions.filter(session => session.endTime && new Date(session.startTime).getTime() >= WEEK_CUTOFF).map(session => session.id));
+    const totals = new Map<number, { exercise: Exercise; duration: number; distance: number; count: number }>();
+    for (const set of sets) {
+      if (!recentSessionIds.has(set.sessionId)) continue;
+      const exercise = exercises.find(item => item.id === set.exerciseId);
+      if (!exercise || exercise.type !== 'cardio') continue;
+      const current = totals.get(exercise.id!) || { exercise, duration: 0, distance: 0, count: 0 };
+      current.duration += getDurationSeconds(set);
+      current.distance += getDistanceMeters(set);
+      current.count += 1;
+      totals.set(exercise.id!, current);
+    }
+    return [...totals.values()].sort((a, b) => b.duration - a.duration);
+  }, [sessions, sets, exercises]);
+
+  const cardioExercises = useMemo(() => {
+    if (!sets || !exercises) return [];
+    const ids = new Set(sets.map(set => set.exerciseId));
+    return exercises.filter(exercise => exercise.type === 'cardio' && ids.has(exercise.id!));
+  }, [sets, exercises]);
+  const activeCardioId = selectedCardioId || cardioExercises[0]?.id || 0;
+  const cardioTrendData = useMemo(() => {
+    if (!sets || !sessions || !activeCardioId) return [];
+    const sessionMap = new Map(sessions.filter(session => session.endTime).map(session => [session.id, session]));
+    return sets.filter(set => set.exerciseId === activeCardioId && sessionMap.has(set.sessionId))
+      .map(set => {
+        const session = sessionMap.get(set.sessionId)!;
+        const pace = paceSecondsPerKm(set);
+        return { date: `${new Date(session.startTime).getMonth() + 1}/${new Date(session.startTime).getDate()}`, timestamp: new Date(session.startTime).getTime(), paceMinutes: pace ? Math.round(pace / 6) / 10 : null, distanceKm: getDistanceMeters(set) / 1000, durationMinutes: getDurationSeconds(set) / 60 };
+      }).sort((a, b) => a.timestamp - b.timestamp).slice(-12);
+  }, [sets, sessions, activeCardioId]);
 
   const handleRestore = async (file: File | undefined) => {
     if (!file || !confirm('恢复备份会替换当前设备上的全部健身数据，确定继续吗？')) return;
@@ -372,7 +409,7 @@ export function ProfilePage() {
       const volume = sessionSets.reduce((total, set) => {
         const exercise = exercises?.find(e => e.id === set.exerciseId);
         if (exercise?.type === 'cardio') return total;
-        return total + setVolume(set, exercise, session.bodyWeight ?? bodyWeight);
+        return total + setVolume(set, exercise, sessionBodyWeights.get(session.id!) ?? bodyWeight);
       }, 0);
 
       // 格式化日期，如 "5月12日"
@@ -385,7 +422,7 @@ export function ProfilePage() {
         session: session
       };
     });
-  }, [sessions, sets, bodyWeight, exercises]);
+  }, [sessions, sets, bodyWeight, exercises, sessionBodyWeights]);
 
   // Calculate 1RM history for the selected exercise
   const oneRepMaxData = useMemo(() => {
@@ -414,7 +451,7 @@ export function ProfilePage() {
 
       const max1RM = setsArray.reduce((max, set) => {
         const exercise = exercises?.find(item => item.id === set.exerciseId);
-        const value = estimatedOneRepMax(set, exercise, session.bodyWeight ?? bodyWeight);
+        const value = estimatedOneRepMax(set, exercise, sessionBodyWeights.get(session.id!) ?? bodyWeight);
         return value === null ? max : Math.max(max, value);
       }, 0);
 
@@ -434,7 +471,7 @@ export function ProfilePage() {
         '1RM': dp.r1rm
       };
     });
-  }, [sessions, sets, activeExerciseId, bodyWeight, exercises]);
+  }, [sessions, sets, activeExerciseId, bodyWeight, exercises, sessionBodyWeights]);
 
   // 2. 渲染历史记录列表
   const renderHistory = () => {
@@ -451,7 +488,7 @@ export function ProfilePage() {
             sets={sets || []} 
             templates={templates || []} 
             exercises={exercises || []} 
-            bodyWeight={bodyWeight} 
+            bodyWeight={sessionBodyWeights.get(session.id!) ?? bodyWeight} 
           />
         ))}
       </div>
@@ -482,6 +519,44 @@ export function ProfilePage() {
           <div style={{ fontSize: '13px', fontWeight: 'bold', marginBottom: '8px' }}>最近 7 天肌群训练组数</div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '7px' }}>
             {weeklyMuscleSets.map(([group, count]) => <span key={group} style={{ fontSize: '12px', background: 'var(--bg-color)', borderRadius: '14px', padding: '5px 9px' }}>{group} {count}组</span>)}
+          </div>
+        </div>
+      )}
+
+      {cardioSummary.length > 0 && (
+        <div style={{ background: 'var(--surface-color)', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '12px', marginBottom: '18px' }}>
+          <div style={{ fontSize: '13px', fontWeight: 'bold', marginBottom: '8px' }}>最近 7 天有氧汇总</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '7px' }}>
+            {cardioSummary.map(item => (
+              <div key={item.exercise.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', background: 'var(--bg-color)', padding: '7px 9px', borderRadius: '7px' }}>
+                <span>{item.exercise.name} · {item.count}次</span>
+                <span>{formatDuration(item.duration)}{item.distance > 0 ? ` · ${(item.distance / 1000).toFixed(2)} km · ${formatPace(item.duration / (item.distance / 1000))}` : ''}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {cardioTrendData.length > 0 && (
+        <div style={{ background: 'var(--surface-color)', border: '1px solid var(--border-color)', borderRadius: '14px', padding: '14px', marginBottom: '20px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+            <strong style={{ fontSize: '14px' }}>有氧表现趋势</strong>
+            <select value={activeCardioId} onChange={event => setSelectedCardioId(Number(event.target.value))} style={{ maxWidth: '55%', padding: '6px', borderRadius: '6px', background: 'var(--bg-color)', color: 'var(--text-color)', border: '1px solid var(--border-color)' }}>
+              {cardioExercises.map(exercise => <option key={exercise.id} value={exercise.id}>{exercise.name}</option>)}
+            </select>
+          </div>
+          <div style={{ width: '100%', height: '170px' }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={cardioTrendData} margin={{ top: 8, right: 8, left: -18, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border-color)" />
+                <XAxis dataKey="date" tick={{ fill: 'var(--text-color)', fontSize: 11 }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fill: 'var(--text-color)', fontSize: 11 }} axisLine={false} tickLine={false} />
+                <Tooltip contentStyle={{ backgroundColor: 'var(--bg-color)', border: '1px solid var(--border-color)', borderRadius: '8px' }} />
+                {cardioTrendData.some(item => item.paceMinutes !== null)
+                  ? <Line type="monotone" dataKey="paceMinutes" name="配速(分/km)" stroke="var(--success-color)" strokeWidth={2} />
+                  : <Line type="monotone" dataKey="durationMinutes" name="时长(分钟)" stroke="var(--success-color)" strokeWidth={2} />}
+              </LineChart>
+            </ResponsiveContainer>
           </div>
         </div>
       )}
@@ -675,6 +750,7 @@ export function ProfilePage() {
             {heatmapData.days.map((day, idx) => {
               const dateStr = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}`;
               const cnt = heatmapData.counts[dateStr] || 0;
+              const isFuture = day.getTime() > new Date().setHours(23, 59, 59, 999);
               
               let bgColor = 'var(--bg-color)';
               if (cnt === 1) {
@@ -688,14 +764,15 @@ export function ProfilePage() {
               return (
                 <div 
                   key={idx}
-                  title={`${readableDate}: ${cnt} 次训练`}
+                  title={isFuture ? undefined : `${readableDate}: ${cnt} 次训练`}
+                  aria-hidden={isFuture}
                   style={{
                     width: '10px',
                     height: '10px',
                     borderRadius: '2px',
-                    backgroundColor: bgColor,
+                    backgroundColor: isFuture ? 'transparent' : bgColor,
                     transition: 'all 0.1s ease',
-                    cursor: 'pointer'
+                    cursor: isFuture ? 'default' : 'pointer'
                   }}
                 />
               );

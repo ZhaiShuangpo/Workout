@@ -7,6 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOCAL_DIST="$SCRIPT_DIR/fitness-pwa/dist"
 RELEASE_ID="$(date +%Y%m%d%H%M%S)"
 REMOTE_RELEASE="/var/www/fitness-releases/$RELEASE_ID"
+FITNESS_DOMAIN="${FITNESS_DOMAIN:-}"
 
 echo "================================================="
 echo "🚀 开始自动部署到腾讯云服务器 ($SERVER_IP)..."
@@ -25,6 +26,20 @@ echo -e "\n[2/2] 正在服务器上配置并替换 Nginx 网页目录..."
 echo "⚠️  注意：此处可能需要您再次输入一次密码。"
 ssh "$SERVER_USER@$SERVER_IP" "mkdir -p '$REMOTE_RELEASE' /var/www/html && cp -a /var/www/html/. '$REMOTE_RELEASE.previous' 2>/dev/null || true; cp -a ~/fitness-app-$RELEASE_ID/. '$REMOTE_RELEASE/'; cp -a '$REMOTE_RELEASE'/. /var/www/html/; rm -rf ~/fitness-app-$RELEASE_ID"
 
+if [ -n "$FITNESS_DOMAIN" ]; then
+    SSL_CERT_PATH="${FITNESS_SSL_CERT:-/etc/letsencrypt/live/$FITNESS_DOMAIN/fullchain.pem}"
+    SSL_KEY_PATH="${FITNESS_SSL_KEY:-/etc/letsencrypt/live/$FITNESS_DOMAIN/privkey.pem}"
+    TEMP_NGINX_CONFIG="$(mktemp)"
+    trap 'rm -f "$TEMP_NGINX_CONFIG"' EXIT
+    sed -e "s|__FITNESS_DOMAIN__|$FITNESS_DOMAIN|g" -e "s|__SSL_CERT__|$SSL_CERT_PATH|g" -e "s|__SSL_KEY__|$SSL_KEY_PATH|g" "$SCRIPT_DIR/nginx-fitness.conf.template" > "$TEMP_NGINX_CONFIG"
+    scp "$TEMP_NGINX_CONFIG" "$SERVER_USER@$SERVER_IP:~/fitness-nginx.conf"
+    ssh "$SERVER_USER@$SERVER_IP" "test -f '$SSL_CERT_PATH' && test -f '$SSL_KEY_PATH' && mv ~/fitness-nginx.conf /etc/nginx/sites-available/fitness-app && ln -sfn /etc/nginx/sites-available/fitness-app /etc/nginx/sites-enabled/fitness-app && nginx -t && systemctl reload nginx"
+    PUBLIC_URL="https://$FITNESS_DOMAIN"
+else
+    PUBLIC_URL="http://$SERVER_IP"
+    echo "⚠️  未设置 FITNESS_DOMAIN，本次仍通过 HTTP 发布，PWA 离线与通知不可用。"
+fi
+
 echo -e "\n🎉 部署完美成功！"
-echo "👉 现在你可以立刻在手机或电脑浏览器访问：http://$SERVER_IP"
+echo "👉 现在你可以立刻在手机或电脑浏览器访问：$PUBLIC_URL"
 echo "📦 当前发布保存在: $REMOTE_RELEASE"

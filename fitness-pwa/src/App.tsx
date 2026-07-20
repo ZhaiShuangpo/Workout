@@ -11,6 +11,11 @@ function App() {
   return (
     <Router>
       <div style={{ flex: 1, paddingBottom: '70px', overflowY: 'auto' }}>
+        {!window.isSecureContext && window.location.hostname !== 'localhost' && (
+          <div role="alert" style={{ padding: '8px 14px', background: '#92400e', color: '#fff', fontSize: '12px', textAlign: 'center' }}>
+            当前使用非安全 HTTP 连接，离线安装、通知及部分备份能力不可用；请改用 HTTPS 地址。
+          </div>
+        )}
         <Suspense fallback={<div style={{ padding: '20px' }}>加载中...</div>}>
           <Routes>
             <Route path="/" element={<WorkoutPage />} />

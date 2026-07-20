@@ -9,6 +9,15 @@ export interface Exercise {
   loadType?: 'external' | 'bodyweight' | 'bodyweight-added' | 'assisted';
   equipment?: string;
   movementPattern?: string;
+  recordingMode?: 'weight_reps' | 'bodyweight_reps' | 'timed_hold' | 'distance_time' | 'time_level' | 'swim' | 'interval';
+  weightInputMode?: 'total' | 'per_implement';
+  implementCount?: number;
+  bodyweightFactor?: number;
+  countInVolume?: boolean;
+  supports1RM?: boolean;
+  primaryMuscles?: string[];
+  secondaryMuscles?: string[];
+  isCustom?: boolean;
 }
 
 export interface PlannedExercise {
@@ -21,6 +30,9 @@ export interface PlannedExercise {
   targetRpe?: number;
   restSeconds: number;
   notes?: string;
+  targetDurationSeconds?: number;
+  targetDistanceMeters?: number;
+  targetLevel?: number;
 }
 
 export interface WorkoutTemplate {
@@ -50,6 +62,74 @@ export interface WorkoutSet {
   completed: boolean;
   duration?: number; // 持续时间 (分钟)
   distance?: number; // 距离 (km)
+  durationSeconds?: number;
+  distanceMeters?: number;
+  setKind?: 'warmup' | 'working' | 'drop' | 'failure';
+  level?: number;
+  incline?: number;
+  heartRate?: number;
+  cadence?: number;
+  strokeRate?: number;
+  poolLengthMeters?: number;
+  swimStroke?: string;
+  workSeconds?: number;
+  recoverySeconds?: number;
+  intervals?: number;
+  loadType?: Exercise['loadType'];
+}
+
+export function exerciseDefaults(exercise: Pick<Exercise, 'name' | 'muscleGroup' | 'type'>): Partial<Exercise> {
+  const { name, muscleGroup, type } = exercise;
+  const muscleParts = muscleGroup.split('/');
+  const fixedMachineNames = ['蝴蝶机', '腿举', '腿屈伸', '腿弯举', '坐姿划船'];
+  const cardioEquipment: Record<string, string> = {
+    跑步机跑步: '跑步机',
+    户外跑步: '户外',
+    动感单车: '动感单车',
+    椭圆机: '椭圆机',
+    划船机: '划船机',
+    爬楼机: '爬楼机',
+    游泳: '泳池'
+  };
+  const base: Partial<Exercise> = {
+    primaryMuscles: [muscleParts[0]],
+    secondaryMuscles: muscleParts.slice(1),
+    weightInputMode: 'total',
+    implementCount: 1,
+    bodyweightFactor: 1,
+    countInVolume: type !== 'cardio',
+    equipment: type === 'cardio'
+      ? cardioEquipment[name] || '有氧器械'
+      : name.includes('哑铃')
+        ? '哑铃'
+        : name.includes('杠铃') || name.includes('硬拉')
+          ? '杠铃'
+          : name.includes('绳索') || name.includes('下拉')
+            ? '绳索器械'
+            : fixedMachineNames.some(keyword => name.includes(keyword))
+              ? '固定器械'
+              : '自重/通用',
+    movementPattern: name.includes('卧推') || name.includes('俯卧撑') ? '水平推' : name.includes('划船') ? '水平拉' : name.includes('引体') || name.includes('下拉') ? '垂直拉' : name.includes('推举') ? '垂直推' : name.includes('深蹲') || name.includes('腿举') ? '蹲' : name.includes('硬拉') || name.includes('臀推') ? '髋主导' : type === 'cardio' ? '有氧' : muscleParts[0]
+  };
+  if (type === 'cardio') {
+    if (name === '游泳') return { ...base, recordingMode: 'swim', countInVolume: false };
+    if (name === '椭圆机' || name === '爬楼机') return { ...base, recordingMode: 'time_level', countInVolume: false };
+    return { ...base, recordingMode: 'distance_time', countInVolume: false };
+  }
+  if (name === '平板支撑') return { ...base, recordingMode: 'timed_hold', loadType: 'bodyweight-added', countInVolume: false, supports1RM: false };
+  if (['卷腹', '悬垂举腿', '俄罗斯转体'].includes(name)) {
+    return { ...base, recordingMode: 'bodyweight_reps', loadType: 'bodyweight-added', countInVolume: false, supports1RM: false };
+  }
+  if (name === '俯卧撑') return { ...base, recordingMode: 'bodyweight_reps', loadType: 'bodyweight-added', bodyweightFactor: 0.65, supports1RM: false };
+  if (name === '引体向上') return { ...base, recordingMode: 'bodyweight_reps', loadType: 'bodyweight-added', supports1RM: true };
+  const isDumbbell = name.includes('哑铃') && name !== '过头臂屈伸';
+  return {
+    ...base,
+    recordingMode: 'weight_reps',
+    weightInputMode: isDumbbell ? 'per_implement' : 'total',
+    implementCount: isDumbbell ? 2 : 1,
+    supports1RM: true
+  };
 }
 
 export interface BodyMetric {
@@ -152,6 +232,21 @@ export class FitnessDB extends Dexie {
         }
       }
     });
+    this.version(4).stores({}).upgrade(async tx => {
+      const exercises = await tx.table('exercises').toArray() as Exercise[];
+      for (const exercise of exercises) {
+        await tx.table('exercises').put({ ...exerciseDefaults(exercise), ...exercise });
+      }
+      const sets = await tx.table('workoutSets').toArray() as WorkoutSet[];
+      for (const set of sets) {
+        await tx.table('workoutSets').put({
+          ...set,
+          setKind: set.setKind || 'working',
+          durationSeconds: set.durationSeconds ?? (set.duration !== undefined ? Math.round(set.duration * 60) : undefined),
+          distanceMeters: set.distanceMeters ?? (set.distance !== undefined ? Math.round(set.distance * 1000) : undefined)
+        });
+      }
+    });
   }
 }
 
@@ -231,6 +326,7 @@ export async function initDB() {
     if (exercise.type !== 'cardio') {
       exercise.loadType = bodyweightExercises.has(exercise.name) ? 'bodyweight-added' : 'external';
     }
+    Object.assign(exercise, exerciseDefaults(exercise));
   }
 
   await db.transaction('rw', [db.exercises, db.userProfiles, db.supplements], async () => {
@@ -244,11 +340,18 @@ export async function initDB() {
     const existing = currentMap.get(defEx.name);
     if (!existing) {
       missingExercises.push(defEx);
-    } else if (existing.type !== defEx.type || existing.loadType !== defEx.loadType) {
+    } else if (
+      existing.type !== defEx.type ||
+      existing.loadType !== defEx.loadType ||
+      existing.recordingMode !== defEx.recordingMode ||
+      existing.equipment !== defEx.equipment ||
+      existing.movementPattern !== defEx.movementPattern
+    ) {
       exercisesToUpdate.push({
         ...existing,
         type: defEx.type,
-        loadType: defEx.loadType
+        loadType: defEx.loadType,
+        ...exerciseDefaults(defEx)
       });
     }
   }
