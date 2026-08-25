@@ -80,17 +80,75 @@ export const SET_KIND_LABELS: Record<NonNullable<WorkoutSet['setKind']>, string>
 };
 
 export function setMeetsPlan(set: WorkoutSet, plan: PlannedExercise, exercise: Exercise | undefined) {
-  if ((set.setKind || 'working') !== 'working') return false;
+  if (set.setKind === 'warmup') return false;
   const mode = exercise?.recordingMode || (exercise?.type === 'cardio' ? 'distance_time' : 'weight_reps');
   if (mode === 'weight_reps' || mode === 'bodyweight_reps') {
-    return set.reps >= plan.minReps && set.reps <= plan.maxReps && (plan.targetWeight === undefined || set.weight >= plan.targetWeight);
+    const repsOk = set.reps >= plan.minReps;
+    const weightOk = plan.targetWeight === undefined || set.weight >= plan.targetWeight;
+    return repsOk && weightOk;
   }
   if (mode === 'timed_hold') return getDurationSeconds(set) >= (plan.targetDurationSeconds || 0);
   if (mode === 'distance_time' || mode === 'swim') {
-    return getDistanceMeters(set) >= (plan.targetDistanceMeters || 0) && getDurationSeconds(set) > 0;
+    const hasDistTarget = (plan.targetDistanceMeters || 0) > 0;
+    const hasDurTarget = (plan.targetDurationSeconds || 0) > 0;
+    if (hasDistTarget && hasDurTarget) {
+      return getDistanceMeters(set) >= plan.targetDistanceMeters! || getDurationSeconds(set) >= plan.targetDurationSeconds!;
+    }
+    if (hasDistTarget) return getDistanceMeters(set) >= plan.targetDistanceMeters!;
+    if (hasDurTarget) return getDurationSeconds(set) >= plan.targetDurationSeconds!;
+    return getDurationSeconds(set) > 0;
   }
-  if (mode === 'time_level') return getDurationSeconds(set) >= (plan.targetDurationSeconds || 0) && (set.level || 0) >= (plan.targetLevel || 0);
+  if (mode === 'time_level') {
+    const durOk = getDurationSeconds(set) >= (plan.targetDurationSeconds || 0);
+    const lvlOk = plan.targetLevel === undefined || (set.level || 0) >= plan.targetLevel;
+    return durOk && lvlOk;
+  }
   if (mode === 'interval') return (set.intervals || 0) > 0;
+  return false;
+}
+
+export function exerciseMeetsPlan(
+  sets: WorkoutSet[],
+  plan: PlannedExercise,
+  exercise: Exercise | undefined
+): boolean {
+  if (!sets || sets.length === 0) return false;
+  const exSets = sets.filter(s => s.exerciseId === plan.exerciseId && (s.setKind || 'working') !== 'warmup');
+  if (exSets.length === 0) return false;
+
+  const mode = exercise?.recordingMode || (exercise?.type === 'cardio' ? 'distance_time' : 'weight_reps');
+
+  // 条件 1: 达标单组的数量达到或超过目标组数（如目标 4 组，完成了 4 组或 6 组）
+  const qualifyingSets = exSets.filter(s => setMeetsPlan(s, plan, exercise));
+  if (qualifyingSets.length >= plan.targetSets) return true;
+
+  // 条件 2: 实际完成的总训练量（次数/总时长/总距离）达到或超过计划预定总量
+  if (mode === 'weight_reps' || mode === 'bodyweight_reps') {
+    const totalPlannedReps = plan.targetSets * plan.minReps;
+    const totalActualReps = exSets.reduce((sum, s) => {
+      if (plan.targetWeight !== undefined && s.weight < plan.targetWeight) return sum;
+      return sum + Math.max(0, s.reps);
+    }, 0);
+    if (totalActualReps >= totalPlannedReps) return true;
+  }
+
+  if (mode === 'timed_hold') {
+    const totalPlannedSeconds = plan.targetSets * (plan.targetDurationSeconds || 0);
+    const totalActualSeconds = exSets.reduce((sum, s) => sum + getDurationSeconds(s), 0);
+    if (totalActualSeconds >= totalPlannedSeconds && totalPlannedSeconds > 0) return true;
+  }
+
+  if (mode === 'distance_time' || mode === 'swim') {
+    if ((plan.targetDistanceMeters || 0) > 0) {
+      const totalActualDist = exSets.reduce((sum, s) => sum + getDistanceMeters(s), 0);
+      if (totalActualDist >= plan.targetDistanceMeters!) return true;
+    }
+    if ((plan.targetDurationSeconds || 0) > 0) {
+      const totalActualDur = exSets.reduce((sum, s) => sum + getDurationSeconds(s), 0);
+      if (totalActualDur >= plan.targetDurationSeconds!) return true;
+    }
+  }
+
   return false;
 }
 

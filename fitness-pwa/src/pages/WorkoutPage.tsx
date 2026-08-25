@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, type WorkoutSession } from '../db';
-import { effectiveLoad, formatDuration, formatPace, formatRecordedSet, getDistanceMeters, getDurationSeconds, paceSecondsPerKm, SET_KIND_LABELS, setMeetsPlan } from '../domain/fitness';
+import { effectiveLoad, formatDuration, formatPace, formatRecordedSet, getDistanceMeters, getDurationSeconds, paceSecondsPerKm, SET_KIND_LABELS, exerciseMeetsPlan } from '../domain/fitness';
 import { Timer, Plus, Minus, Check, Play, Square, Dumbbell, SkipForward, Trash2, RefreshCw } from 'lucide-react';
 
 export function WorkoutPage() {
@@ -329,7 +329,7 @@ export function WorkoutPage() {
     return `目标 ${currentPlan.targetSets} 组 × ${currentPlan.minReps}-${currentPlan.maxReps} 次 @ RPE ${currentPlan.targetRpe || 8}`;
   })() : '';
   const completedForTemplate = sessionTemplate?.exercises?.filter(item =>
-    (currentSets || []).filter(set => set.exerciseId === item.exerciseId && setMeetsPlan(set, item, allExercises.find(exercise => exercise.id === item.exerciseId))).length >= item.targetSets
+    exerciseMeetsPlan(currentSets || [], item, allExercises.find(exercise => exercise.id === item.exerciseId))
   ).length || 0;
 
   useEffect(() => {
@@ -655,9 +655,15 @@ export function WorkoutPage() {
               backgroundColor: 'var(--surface-color)', color: 'var(--text-color)'
             }}
           >
-            {sessionExercises.map(ex => (
-              <option key={ex.id} value={ex.id}>{ex.name}</option>
-            ))}
+            {sessionExercises.map(ex => {
+              const plan = sessionTemplate?.exercises?.find(item => item.exerciseId === ex.id);
+              const isMet = plan ? exerciseMeetsPlan(currentSets || [], plan, ex) : false;
+              return (
+                <option key={ex.id} value={ex.id}>
+                  {isMet ? '✅ ' : ''}{ex.name}
+                </option>
+              );
+            })}
           </select>
           {sessionTemplate && (
             <button onClick={() => setShowAllExercises(value => !value)} style={{ padding: '0 10px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--surface-color)', color: 'var(--text-color)' }}>
@@ -667,7 +673,18 @@ export function WorkoutPage() {
         </div>
         {(currentPlan || lastExerciseSets?.sets.length) && (
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px', fontSize: '12px', opacity: 0.8 }}>
-            <span>{currentPlan ? currentPlanText : '临时替换动作'}</span>
+            <span>
+              {currentPlan ? (
+                <>
+                  {currentPlanText}
+                  {exerciseMeetsPlan(currentSets || [], currentPlan, currentEx) && (
+                    <span style={{ marginLeft: '6px', color: 'var(--success-color)', fontWeight: 'bold' }}>
+                      (已达标 ✅)
+                    </span>
+                  )}
+                </>
+              ) : '临时替换动作'}
+            </span>
             {lastExerciseSets?.sets.length ? (
               <button onClick={applyLastPerformance} style={{ display: 'flex', alignItems: 'center', gap: '4px', border: 'none', background: 'none', color: 'var(--primary-color)', cursor: 'pointer' }}>
                 <RefreshCw size={13} /> 套用上次

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { allocateWholePortions, effectiveLoad, estimatedOneRepMax, formatPace, nutritionTargets, setMeetsPlan, setVolume } from './fitness.ts';
+import { allocateWholePortions, effectiveLoad, estimatedOneRepMax, formatPace, nutritionTargets, setMeetsPlan, exerciseMeetsPlan, setVolume } from './fitness.ts';
 import type { Exercise, PlannedExercise, UserProfile, WorkoutSet } from '../db.ts';
 
 const baseSet: WorkoutSet = { sessionId: 1, exerciseId: 1, setNumber: 1, weight: 20, reps: 10, completed: true };
@@ -23,11 +23,30 @@ test('热身组不计容量', () => {
   assert.equal(setVolume({ ...baseSet, setKind: 'warmup' }, { name: '卧推', muscleGroup: '胸部', description: '', countInVolume: true }, 70), 0);
 });
 
-test('计划完成度按记录模式判断', () => {
-  const plan: PlannedExercise = { exerciseId: 1, order: 0, targetSets: 3, minReps: 8, maxReps: 12, restSeconds: 90, targetDurationSeconds: 60 };
-  assert.equal(setMeetsPlan({ ...baseSet, reps: 7, setKind: 'working' }, plan, { name: '卧推', muscleGroup: '胸部', description: '', recordingMode: 'weight_reps' }), false);
+test('计划完成度按记录模式判断：超过目标次数依然判定为单组达标', () => {
+  const plan: PlannedExercise = { exerciseId: 1, order: 0, targetSets: 4, minReps: 6, maxReps: 8, restSeconds: 90 };
+  assert.equal(setMeetsPlan({ ...baseSet, reps: 5, setKind: 'working' }, plan, { name: '卧推', muscleGroup: '胸部', description: '', recordingMode: 'weight_reps' }), false);
+  assert.equal(setMeetsPlan({ ...baseSet, reps: 8, setKind: 'working' }, plan, { name: '卧推', muscleGroup: '胸部', description: '', recordingMode: 'weight_reps' }), true);
   assert.equal(setMeetsPlan({ ...baseSet, reps: 10, setKind: 'working' }, plan, { name: '卧推', muscleGroup: '胸部', description: '', recordingMode: 'weight_reps' }), true);
-  assert.equal(setMeetsPlan({ ...baseSet, reps: 0, durationSeconds: 60, setKind: 'working' }, plan, { name: '平板', muscleGroup: '核心', description: '', recordingMode: 'timed_hold' }), true);
+  assert.equal(setMeetsPlan({ ...baseSet, reps: 10, setKind: 'warmup' }, plan, { name: '卧推', muscleGroup: '胸部', description: '', recordingMode: 'weight_reps' }), false);
+  assert.equal(setMeetsPlan({ ...baseSet, reps: 0, durationSeconds: 60, setKind: 'working' }, { ...plan, targetDurationSeconds: 60 }, { name: '平板', muscleGroup: '核心', description: '', recordingMode: 'timed_hold' }), true);
+});
+
+test('动作整体达标：完成4组10次或6组8次或超量完成均判定为达标', () => {
+  const plan: PlannedExercise = { exerciseId: 1, order: 0, targetSets: 4, minReps: 6, maxReps: 8, restSeconds: 90 };
+  const exercise: Exercise = { id: 1, name: '卧推', muscleGroup: '胸部', description: '', recordingMode: 'weight_reps' };
+  
+  // 场景 1: 完成 4 组 10 次（目标 4 组 6-8 次）
+  const sets4x10: WorkoutSet[] = [1, 2, 3, 4].map(num => ({ ...baseSet, setNumber: num, reps: 10, setKind: 'working' }));
+  assert.equal(exerciseMeetsPlan(sets4x10, plan, exercise), true);
+
+  // 场景 2: 完成 6 组 8 次（目标 4 组 6-8 次）
+  const sets6x8: WorkoutSet[] = [1, 2, 3, 4, 5, 6].map(num => ({ ...baseSet, setNumber: num, reps: 8, setKind: 'working' }));
+  assert.equal(exerciseMeetsPlan(sets6x8, plan, exercise), true);
+
+  // 场景 3: 完成 3 组 12 次（总次数 36 次 >= 目标最低 24 次）
+  const sets3x12: WorkoutSet[] = [1, 2, 3].map(num => ({ ...baseSet, setNumber: num, reps: 12, setKind: 'working' }));
+  assert.equal(exerciseMeetsPlan(sets3x12, plan, exercise), true);
 });
 
 test('配速格式使用秒级精度', () => {
