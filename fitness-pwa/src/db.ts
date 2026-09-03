@@ -18,6 +18,7 @@ export interface Exercise {
   primaryMuscles?: string[];
   secondaryMuscles?: string[];
   isCustom?: boolean;
+  note?: string; // 动作器械/孔位备忘 (如：座椅4档，把手外侧)
 }
 
 export interface PlannedExercise {

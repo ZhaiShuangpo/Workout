@@ -1,6 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { useLiveQuery } from 'dexie-react-hooks';
-import { Calculator, Utensils, Info, Plus, Trash2, Check } from 'lucide-react';
+import { Calculator, Utensils, Info } from 'lucide-react';
 import { db, type UserProfile } from '../db';
 import { allocateWholePortions, isValidProfile, nutritionTargets } from '../domain/fitness';
 
@@ -25,29 +24,12 @@ export function NutritionPage() {
   const [activity, setActivity] = useState<number>(() => getInitialState('activity', 1.2));
   const [goal, setGoal] = useState<'cut' | 'maintain' | 'bulk'>(() => getInitialState('goal', 'maintain'));
   const [selectedTab, setSelectedTab] = useState<'home' | 'takeout' | 'minimal'>('home');
-  const today = new Date().toLocaleDateString('en-CA');
-  const entries = useLiveQuery(() => db.nutritionEntries.where('date').equals(today).toArray(), [today]) || [];
-  const recipes = useLiveQuery(() => db.recipes.toArray()) || [];
-  const supplements = useLiveQuery(() => db.supplements.toArray()) || [];
-  const supplementChecks = useLiveQuery(() => db.supplementChecks.where('date').equals(today).toArray(), [today]) || [];
-  const [entryName, setEntryName] = useState('');
-  const [entryCalories, setEntryCalories] = useState(0);
-  const [entryProtein, setEntryProtein] = useState(0);
-  const [entryCarbs, setEntryCarbs] = useState(0);
-  const [entryFat, setEntryFat] = useState(0);
-  const [saveAsRecipe, setSaveAsRecipe] = useState(false);
 
   const profile: UserProfile = useMemo(() => ({ id: 'current', gender, age, height, weight, activity, goal }), [gender, age, height, weight, activity, goal]);
   const profileValid = isValidProfile(profile);
   const targets = nutritionTargets(profile);
   const { tdee, calories: targetCalories, protein, fat, carbs } = targets;
   const macros = { protein, fat, carbs };
-  const consumed = entries.reduce((sum, entry) => ({
-    calories: sum.calories + entry.calories,
-    protein: sum.protein + entry.protein,
-    carbs: sum.carbs + entry.carbs,
-    fat: sum.fat + entry.fat
-  }), { calories: 0, protein: 0, carbs: 0, fat: 0 });
 
   // Save to localStorage when inputs change
   useEffect(() => {
@@ -55,29 +37,6 @@ export function NutritionPage() {
     localStorage.setItem('nutrition_profile', JSON.stringify(profile));
     db.userProfiles.put(profile).catch(console.error);
   }, [profile, profileValid]);
-
-  const addEntry = async (values = { name: entryName, calories: entryCalories, protein: entryProtein, carbs: entryCarbs, fat: entryFat }) => {
-    if (!values.name.trim() || values.calories < 0 || values.protein < 0 || values.carbs < 0 || values.fat < 0) {
-      alert('请输入餐食名称，营养数值不能为负数');
-      return;
-    }
-    await db.nutritionEntries.add({ date: today, ...values, name: values.name.trim() });
-    if (saveAsRecipe && !recipes.some(recipe => recipe.name === values.name.trim())) {
-      await db.recipes.add({ ...values, name: values.name.trim() });
-    }
-    setEntryName('');
-    setEntryCalories(0);
-    setEntryProtein(0);
-    setEntryCarbs(0);
-    setEntryFat(0);
-    setSaveAsRecipe(false);
-  };
-
-  const toggleSupplement = async (supplementId: number) => {
-    const existing = supplementChecks.find(check => check.supplementId === supplementId);
-    if (existing) await db.supplementChecks.delete(existing.id!);
-    else await db.supplementChecks.add({ supplementId, date: today });
-  };
 
   const renderMealsPlan = () => {
     // 换算手掌/拳头/碗等单位
@@ -356,78 +315,6 @@ export function NutritionPage() {
         </div>
       </div>
 
-      {/* 每日摄入闭环 */}
-      <section style={{ marginTop: '28px', backgroundColor: 'var(--surface-color)', padding: '16px', borderRadius: '16px', border: '1px solid var(--border-color)' }}>
-        <h3 style={{ margin: '0 0 6px', fontSize: '18px' }}>今日摄入与剩余</h3>
-        <p style={{ margin: '0 0 14px', fontSize: '12px', opacity: 0.65 }}>{today}</p>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px', marginBottom: '16px' }}>
-          {[
-            ['热量', consumed.calories, targetCalories, 'kcal'],
-            ['蛋白', consumed.protein, protein, 'g'],
-            ['碳水', consumed.carbs, carbs, 'g'],
-            ['脂肪', consumed.fat, fat, 'g']
-          ].map(([label, actual, target, unit]) => (
-            <div key={String(label)} style={{ background: 'var(--bg-color)', borderRadius: '8px', padding: '9px 5px', textAlign: 'center' }}>
-              <div style={{ fontSize: '11px', opacity: 0.65 }}>{label}</div>
-              <div style={{ fontWeight: 'bold', fontSize: '14px' }}>{Number(actual).toFixed(0)}/{Number(target).toFixed(0)}</div>
-              <div style={{ fontSize: '10px', color: Number(actual) > Number(target) ? 'var(--danger-color)' : 'var(--success-color)' }}>
-                剩余 {Math.round(Number(target) - Number(actual))}{unit}
-              </div>
-            </div>
-          ))}
-        </div>
-
-        <div style={{ display: 'grid', gridTemplateColumns: '2fr repeat(4, 1fr)', gap: '6px' }}>
-          <input aria-label="餐食名称" placeholder="餐食名称" value={entryName} onChange={event => setEntryName(event.target.value)} style={compactInputStyle} />
-          <NutritionNumber label="热量" value={entryCalories} onChange={setEntryCalories} />
-          <NutritionNumber label="蛋白" value={entryProtein} onChange={setEntryProtein} />
-          <NutritionNumber label="碳水" value={entryCarbs} onChange={setEntryCarbs} />
-          <NutritionNumber label="脂肪" value={entryFat} onChange={setEntryFat} />
-        </div>
-        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', margin: '10px 0' }}>
-          <input type="checkbox" checked={saveAsRecipe} onChange={event => setSaveAsRecipe(event.target.checked)} /> 保存为常用餐
-        </label>
-        <button onClick={() => addEntry()} style={{ width: '100%', padding: '10px', border: 'none', borderRadius: '8px', background: 'var(--primary-color)', color: '#fff', fontWeight: 'bold' }}>
-          <Plus size={15} style={{ verticalAlign: 'middle' }} /> 添加摄入
-        </button>
-
-        {recipes.length > 0 && (
-          <div style={{ marginTop: '14px' }}>
-            <div style={{ fontSize: '12px', opacity: 0.7, marginBottom: '6px' }}>常用餐一键添加</div>
-            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-              {recipes.map(recipe => (
-                <button key={recipe.id} onClick={() => addEntry(recipe)} style={{ border: '1px solid var(--border-color)', borderRadius: '16px', padding: '6px 10px', background: 'var(--bg-color)', color: 'var(--text-color)' }}>
-                  {recipe.name}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {entries.length > 0 && (
-          <div style={{ marginTop: '14px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            {entries.map(entry => (
-              <div key={entry.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12px', background: 'var(--bg-color)', padding: '8px', borderRadius: '7px' }}>
-                <span>{entry.name}</span><span>{entry.calories} kcal · P{entry.protein} C{entry.carbs} F{entry.fat}</span>
-                <button aria-label={`删除${entry.name}`} onClick={() => db.nutritionEntries.delete(entry.id!)} style={{ border: 'none', background: 'none', color: 'var(--danger-color)' }}><Trash2 size={14} /></button>
-              </div>
-            ))}
-          </div>
-        )}
-
-        <div style={{ borderTop: '1px solid var(--border-color)', marginTop: '16px', paddingTop: '12px' }}>
-          <div style={{ fontSize: '13px', fontWeight: 'bold', marginBottom: '8px' }}>今日补剂</div>
-          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-            {supplements.map(supplement => {
-              const checked = supplementChecks.some(item => item.supplementId === supplement.id);
-              return <button key={supplement.id} onClick={() => toggleSupplement(supplement.id!)} style={{ display: 'flex', alignItems: 'center', gap: '5px', border: `1px solid ${checked ? 'var(--success-color)' : 'var(--border-color)'}`, borderRadius: '18px', padding: '7px 10px', background: checked ? 'var(--success-color)' : 'var(--bg-color)', color: checked ? '#fff' : 'var(--text-color)' }}>
-                {checked && <Check size={14} />} {supplement.name}
-              </button>;
-            })}
-          </div>
-        </div>
-      </section>
-
       {/* 饮食方案推荐 */}
       <div style={{ marginTop: '28px' }}>
         <h3 style={{ margin: '0 0 16px 0', fontSize: '18px', display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -538,16 +425,3 @@ const goalBtnStyle = {
   transition: 'all 0.2s ease'
 };
 
-const compactInputStyle = {
-  minWidth: 0,
-  width: '100%',
-  padding: '8px 6px',
-  borderRadius: '6px',
-  border: '1px solid var(--border-color)',
-  background: 'var(--bg-color)',
-  color: 'var(--text-color)'
-};
-
-function NutritionNumber({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
-  return <input aria-label={label} title={label} type="number" min={0} placeholder={label} value={value || ''} onChange={event => onChange(Math.max(0, Number(event.target.value) || 0))} style={compactInputStyle} />;
-}

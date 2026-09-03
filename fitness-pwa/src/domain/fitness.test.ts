@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { allocateWholePortions, effectiveLoad, estimatedOneRepMax, formatPace, nutritionTargets, setMeetsPlan, exerciseMeetsPlan, setVolume } from './fitness.ts';
+import { allocateWholePortions, calculateBarbellPlates, effectiveLoad, estimatedOneRepMax, formatPace, nutritionTargets, setMeetsPlan, exerciseMeetsPlan, setVolume } from './fitness.ts';
 import type { Exercise, PlannedExercise, UserProfile, WorkoutSet } from '../db.ts';
 
 const baseSet: WorkoutSet = { sessionId: 1, exerciseId: 1, setNumber: 1, weight: 20, reps: 10, completed: true };
@@ -62,3 +62,23 @@ test('营养目标有安全热量下限', () => {
   const profile: UserProfile = { id: 'current', gender: 'female', age: 40, height: 150, weight: 40, activity: 1.2, goal: 'cut' };
   assert.equal(nutritionTargets(profile).calories, 1200);
 });
+
+test('杠铃片速算器准确计算单侧挂片', () => {
+  // 100kg 总重，20kg 杠铃杆，单侧 40kg -> 25kg + 15kg
+  const calc100 = calculateBarbellPlates(100, 20);
+  assert.equal(calc100.perSideWeight, 40);
+  assert.deepEqual(calc100.plates, [{ weight: 25, count: 1 }, { weight: 15, count: 1 }]);
+  assert.equal(calc100.remainder, 0);
+
+  // 82.5kg 总重，20kg 杆，单侧 31.25kg -> 25kg + 5kg + 1.25kg
+  const calc82_5 = calculateBarbellPlates(82.5, 20);
+  assert.equal(calc82_5.perSideWeight, 31.25);
+  assert.deepEqual(calc82_5.plates, [{ weight: 25, count: 1 }, { weight: 5, count: 1 }, { weight: 1.25, count: 1 }]);
+  assert.equal(calc82_5.remainder, 0);
+
+  // 20kg 只有杠铃杆，单侧 0kg
+  const calc20 = calculateBarbellPlates(20, 20);
+  assert.equal(calc20.perSideWeight, 0);
+  assert.equal(calc20.plates.length, 0);
+});
+

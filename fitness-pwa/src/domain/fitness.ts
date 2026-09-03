@@ -180,3 +180,85 @@ export function allocateWholePortions(total: number, ratios = [0.25, 0.4, 0.35])
   for (let i = 0; i < remaining; i += 1) result[order[i % order.length].index] += 1;
   return result;
 }
+
+export interface PlateCalculation {
+  barWeight: number;
+  perSideWeight: number;
+  plates: { weight: number; count: number }[];
+  remainder: number;
+}
+
+export function calculateBarbellPlates(
+  totalWeight: number,
+  barWeight = 20,
+  availablePlates = [25, 20, 15, 10, 5, 2.5, 1.25]
+): PlateCalculation {
+  const safeTotal = Math.max(0, Number(totalWeight) || 0);
+  if (safeTotal <= barWeight) {
+    return {
+      barWeight,
+      perSideWeight: 0,
+      plates: [],
+      remainder: Math.max(0, safeTotal - barWeight)
+    };
+  }
+
+  const perSideTarget = (safeTotal - barWeight) / 2;
+  let remaining = perSideTarget;
+  const plates: { weight: number; count: number }[] = [];
+
+  for (const plate of availablePlates) {
+    if (remaining >= plate) {
+      const count = Math.floor(remaining / plate);
+      plates.push({ weight: plate, count });
+      remaining = Number((remaining - count * plate).toFixed(2));
+    }
+  }
+
+  return {
+    barWeight,
+    perSideWeight: perSideTarget,
+    plates,
+    remainder: remaining
+  };
+}
+
+export function triggerRestEndAlert() {
+  // 1. 手机物理震动 (两次短促震动)
+  if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+    try {
+      navigator.vibrate([250, 120, 250]);
+    } catch {
+      // ignore
+    }
+  }
+
+  // 2. Web Audio API 原生合成音（无需任何网络音频资源）
+  if (typeof window !== 'undefined') {
+    try {
+      const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      if (AudioCtx) {
+        const ctx = new AudioCtx();
+        const now = ctx.currentTime;
+        
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(880, now);
+        osc.frequency.setValueAtTime(1760, now + 0.12);
+        
+        gain.gain.setValueAtTime(0.2, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+        
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        
+        osc.start(now);
+        osc.stop(now + 0.35);
+      }
+    } catch {
+      // Audio context might be restricted
+    }
+  }
+}
+
