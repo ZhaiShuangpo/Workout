@@ -13,6 +13,7 @@ import {
 } from '../domain/fitness';
 import { PlateCalculatorModal } from '../components/PlateCalculatorModal';
 import { WorkoutSummaryModal, type WorkoutSummaryData } from '../components/WorkoutSummaryModal';
+import { TechniqueCueModal } from '../components/TechniqueCueModal';
 import {
   Timer,
   Plus,
@@ -24,7 +25,8 @@ import {
   Trash2,
   RefreshCw,
   Square,
-  Edit3
+  Edit3,
+  Info
 } from 'lucide-react';
 
 export function WorkoutPage() {
@@ -47,6 +49,7 @@ export function WorkoutPage() {
 
   // 弹窗状态
   const [showPlateCalculator, setShowPlateCalculator] = useState(false);
+  const [showTechniqueModal, setShowTechniqueModal] = useState(false);
   const [summaryData, setSummaryData] = useState<WorkoutSummaryData | null>(null);
 
   // 状态持久化
@@ -149,16 +152,24 @@ export function WorkoutPage() {
 
   const handleEndWorkout = async () => {
     if (!activeSession?.id) return;
+    const sets = currentSets || [];
+
+    // 若无做组记录，提供直接放弃机制，不留空白脏数据
+    if (sets.length === 0) {
+      if (confirm('本次训练尚未记录任何组数，确认放弃本次训练吗？（不会在历史中留下空白记录）')) {
+        await db.workoutSessions.delete(activeSession.id);
+        setRestEndTime(null);
+        setRestTimeLeft(0);
+      }
+      return;
+    }
 
     const incomplete = sessionTemplate?.exercises?.length
       ? sessionTemplate.exercises.length - completedForTemplate
       : 0;
-    const message = (currentSets || []).length === 0
-      ? '本次训练还没有记录，确认结束吗？'
-      : incomplete > 0 ? `还有 ${incomplete} 个动作未达到计划目标，仍要结束吗？` : '确认结束本次训练吗？';
+    const message = incomplete > 0 ? `还有 ${incomplete} 个动作未达到计划目标，仍要结束吗？` : '确认结束本次训练吗？';
 
     if (confirm(message)) {
-      const sets = currentSets || [];
       const endTime = new Date();
       await db.workoutSessions.update(activeSession.id, { endTime });
 
@@ -579,7 +590,21 @@ export function WorkoutPage() {
       {/* 动作选择器 */}
       <div style={{ marginBottom: '16px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-          <label style={{ fontWeight: 'bold', fontSize: '14px' }}>当前动作</label>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <label style={{ fontWeight: 'bold', fontSize: '14px' }}>当前动作</label>
+            {currentEx && (
+              <button
+                onClick={() => setShowTechniqueModal(true)}
+                style={{
+                  fontSize: '11px', padding: '2px 7px', borderRadius: '12px',
+                  border: '1px solid var(--primary-color)', background: 'rgba(37, 99, 235, 0.1)',
+                  color: 'var(--primary-color)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '3px'
+                }}
+              >
+                <Info size={12} /> 动作要领
+              </button>
+            )}
+          </div>
           {sessionTemplate && (
             <button 
               onClick={() => setShowAllExercises(v => !v)} 
@@ -838,22 +863,30 @@ export function WorkoutPage() {
       {/* 本动作已完成的组数 */}
       {renderCurrentExerciseSets()}
 
-      {/* 结束训练大按钮 */}
+      {/* 结束训练大按钮 (无组数记录时显示放弃本次训练) */}
       <div style={{ marginTop: '36px' }}>
         <button 
           onClick={handleEndWorkout}
           style={{
             width: '100%', padding: '14px', fontSize: '15px', fontWeight: 'bold',
-            color: 'var(--danger-color)', backgroundColor: 'transparent',
-            border: '1px solid var(--danger-color)', borderRadius: '12px',
+            color: (currentSets || []).length === 0 ? 'var(--text-color)' : 'var(--danger-color)',
+            backgroundColor: 'transparent',
+            border: `1px solid ${(currentSets || []).length === 0 ? 'var(--border-color)' : 'var(--danger-color)'}`,
+            borderRadius: '12px',
+            opacity: (currentSets || []).length === 0 ? 0.75 : 1,
             display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '8px',
             cursor: 'pointer'
           }}
         >
           <Square fill="currentColor" size={16} />
-          结束本次训练
+          {(currentSets || []).length === 0 ? '放弃本次训练 (无做组记录)' : '结束本次训练'}
         </button>
       </div>
+
+      {/* 动作要领弹窗 */}
+      {showTechniqueModal && currentEx && (
+        <TechniqueCueModal exercise={currentEx} onClose={() => setShowTechniqueModal(false)} />
+      )}
 
       {/* 【新功能 3】杠铃片速算器弹窗 */}
       {showPlateCalculator && (

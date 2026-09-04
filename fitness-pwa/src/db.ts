@@ -19,6 +19,7 @@ export interface Exercise {
   secondaryMuscles?: string[];
   isCustom?: boolean;
   note?: string; // 动作器械/孔位备忘 (如：座椅4档，把手外侧)
+  techniqueCues?: string[]; // 动作标准发力要领与避坑提示
 }
 
 export interface PlannedExercise {
