@@ -43,10 +43,6 @@ export function PlansPage() {
   const [isAddingExercise, setIsAddingExercise] = useState(false);
   const [customName, setCustomName] = useState('');
   const [customMuscle, setCustomMuscle] = useState('胸部');
-  const [customType, setCustomType] = useState<'strength' | 'cardio'>('strength');
-  const [customMode, setCustomMode] = useState<Exercise['recordingMode']>('weight_reps');
-  const [customEquipment, setCustomEquipment] = useState('');
-  const [customMovement, setCustomMovement] = useState('');
 
   const allExercisesQuery = useLiveQuery(() => db.exercises.toArray());
   const exercises = useMemo(() => allExercisesQuery || [], [allExercisesQuery]);
@@ -169,13 +165,17 @@ export function PlansPage() {
       alert('请输入不重复的动作名称');
       return;
     }
-    const seed = { name: customName.trim(), muscleGroup: customMuscle.trim() || '胸部', description: '自定义动作', type: customType } as Exercise;
+    const isCardio = customMuscle === '有氧心肺';
+    const seed = {
+      name: customName.trim(),
+      muscleGroup: customMuscle.trim() || '胸部',
+      description: '自定义动作',
+      type: isCardio ? 'cardio' : 'strength'
+    } as Exercise;
     await db.exercises.add({
       ...seed,
       ...exerciseDefaults(seed),
-      recordingMode: customMode,
-      equipment: customEquipment.trim() || undefined,
-      movementPattern: customMovement.trim() || undefined,
+      recordingMode: isCardio ? 'distance_time' : 'weight_reps',
       isCustom: true
     });
     setCustomName('');
@@ -448,12 +448,11 @@ export function PlansPage() {
                           {isSelected && <Check size={18} />}
                         </div>
                         {isSelected && plan && (
-                          <div onClick={event => event.stopPropagation()} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(58px, 1fr))', gap: '6px', color: '#fff' }}>
-                            <PlanNumber label="组" value={plan.targetSets} onChange={value => updatePlan(ex.id!, { targetSets: value })} />
+                          <div onClick={event => event.stopPropagation()} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(65px, 1fr))', gap: '6px', color: '#fff' }}>
+                            <PlanNumber label="组数" value={plan.targetSets} onChange={value => updatePlan(ex.id!, { targetSets: value })} />
                             {(mode === 'weight_reps' || mode === 'bodyweight_reps') && <>
                               <PlanNumber label="最低次数" value={plan.minReps} onChange={value => updatePlan(ex.id!, { minReps: value })} />
                               <PlanNumber label="最高次数" value={plan.maxReps} onChange={value => updatePlan(ex.id!, { maxReps: value })} />
-                              <PlanNumber label="目标重量" value={plan.targetWeight || 0} min={0} onChange={value => updatePlan(ex.id!, { targetWeight: value })} />
                             </>}
                             {(mode === 'timed_hold' || mode === 'distance_time' || mode === 'time_level' || mode === 'swim') && (
                               <PlanNumber label="目标分钟" value={Math.round((plan.targetDurationSeconds || 0) / 60)} min={0} onChange={value => updatePlan(ex.id!, { targetDurationSeconds: value * 60 })} />
@@ -463,8 +462,7 @@ export function PlansPage() {
                             )}
                             {mode === 'swim' && <PlanNumber label="目标米数" value={plan.targetDistanceMeters || 0} min={0} step={25} onChange={value => updatePlan(ex.id!, { targetDistanceMeters: value })} />}
                             {mode === 'time_level' && <PlanNumber label="目标等级" value={plan.targetLevel || 0} min={0} onChange={value => updatePlan(ex.id!, { targetLevel: value })} />}
-                            <PlanNumber label="RPE" value={plan.targetRpe || 8} onChange={value => updatePlan(ex.id!, { targetRpe: value })} />
-                            <PlanNumber label="休息秒" value={plan.restSeconds} min={0} onChange={value => updatePlan(ex.id!, { restSeconds: value })} />
+                            <PlanNumber label="休息秒" value={plan.restSeconds} min={0} step={15} onChange={value => updatePlan(ex.id!, { restSeconds: value })} />
                             <div style={{ gridColumn: '1 / -1', display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
                               <button aria-label="上移动作" onClick={() => moveExercise(ex.id!, -1)}><ArrowUp size={16} /></button>
                               <button aria-label="下移动作" onClick={() => moveExercise(ex.id!, 1)}><ArrowDown size={16} /></button>
@@ -543,16 +541,35 @@ export function PlansPage() {
           </button>
           {isAddingExercise && (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '8px', padding: '12px', background: 'var(--surface-color)', borderRadius: '10px' }}>
-              <input placeholder="动作名称" value={customName} onChange={event => setCustomName(event.target.value)} style={libraryInputStyle} />
-              <input placeholder="主要肌群" value={customMuscle} onChange={event => setCustomMuscle(event.target.value)} style={libraryInputStyle} />
-              <select value={customType} onChange={event => { const type = event.target.value as 'strength' | 'cardio'; setCustomType(type); setCustomMode(type === 'cardio' ? 'distance_time' : 'weight_reps'); }} style={libraryInputStyle}><option value="strength">力量/技能</option><option value="cardio">有氧</option></select>
-              <select value={customMode} onChange={event => setCustomMode(event.target.value as Exercise['recordingMode'])} style={libraryInputStyle}>
-                <option value="weight_reps">重量+次数</option><option value="bodyweight_reps">自重+次数</option><option value="timed_hold">静态保持</option><option value="distance_time">距离+时间</option><option value="time_level">时间+等级</option><option value="swim">游泳</option><option value="interval">间歇</option>
+              <input
+                placeholder="动作名称 (如: 上斜哑铃卧推)"
+                value={customName}
+                onChange={event => setCustomName(event.target.value)}
+                style={libraryInputStyle}
+              />
+              <select
+                value={customMuscle}
+                onChange={event => setCustomMuscle(event.target.value)}
+                style={libraryInputStyle}
+              >
+                {['胸部', '背部', '腿部', '肩部', '手臂', '核心', '有氧心肺', '全身'].map(m => (
+                  <option key={m} value={m}>{m}</option>
+                ))}
               </select>
-              <input placeholder="器械，例如：哑铃" value={customEquipment} onChange={event => setCustomEquipment(event.target.value)} style={libraryInputStyle} />
-              <input placeholder="动作模式，例如：水平推" value={customMovement} onChange={event => setCustomMovement(event.target.value)} style={libraryInputStyle} />
-              <button onClick={() => setIsAddingExercise(false)} style={{ padding: '10px', border: 'none', borderRadius: '7px', cursor: 'pointer' }}>取消</button>
-              <button onClick={handleAddExercise} style={{ padding: '10px', border: 'none', borderRadius: '7px', background: 'var(--primary-color)', color: '#fff', fontWeight: 'bold', cursor: 'pointer' }}>保存动作</button>
+              <button
+                type="button"
+                onClick={() => setIsAddingExercise(false)}
+                style={{ padding: '10px', border: 'none', borderRadius: '7px', cursor: 'pointer', background: 'var(--border-color)', color: 'var(--text-color)' }}
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={handleAddExercise}
+                style={{ padding: '10px', border: 'none', borderRadius: '7px', background: 'var(--primary-color)', color: '#fff', fontWeight: 'bold', cursor: 'pointer' }}
+              >
+                保存动作
+              </button>
             </div>
           )}
           {filteredLibraryExercises.map((ex) => (

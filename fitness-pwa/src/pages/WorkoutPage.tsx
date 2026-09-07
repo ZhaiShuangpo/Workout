@@ -4,7 +4,6 @@ import { db, type WorkoutSession, type WorkoutSet } from '../db';
 import {
   estimatedOneRepMax,
   exerciseMeetsPlan,
-  formatDuration,
   formatRecordedSet,
   getDistanceMeters,
   getDurationSeconds,
@@ -382,51 +381,6 @@ export function WorkoutPage() {
     return lastExerciseSets.sets.find(s => (s.setNumber || 0) === currentSetNum) || lastExerciseSets.sets[currentSetNum - 1] || null;
   }, [lastExerciseSets, currentSetNum]);
 
-  // 渐进性超负荷建议渲染
-  const renderOverloadSuggestion = () => {
-    if (!lastExerciseSets || lastExerciseSets.sets.length === 0 || !currentEx) return null;
-    const pastSets = lastExerciseSets.sets.filter(set => (set.setKind || 'working') === 'working');
-    if (pastSets.length === 0) return null;
-
-    let bestSet: WorkoutSet;
-    let suggestion: string;
-
-    if (isCardio) {
-      bestSet = pastSets.reduce((best, set) => getDistanceMeters(set) > getDistanceMeters(best) ? set : best);
-      suggestion = `保持 ${formatDuration(getDurationSeconds(bestSet))}，尝试将距离增加约 0.2 km。`;
-    } else {
-      bestSet = pastSets.reduce((best, set) => (set.weight * set.reps) > (best.weight * best.reps) ? set : best);
-      const maxReps = currentPlan?.maxReps || 12;
-      if (bestSet.reps >= maxReps) {
-        suggestion = `已达上限次数，尝试重量增加 2.5 kg（即 ${bestSet.weight + 2.5} kg），次数回到 ${currentPlan?.minReps || 8} 次。`;
-      } else {
-        suggestion = `重量保持 ${bestSet.weight} kg，尝试比上次多完成 1 次（即 ${bestSet.reps + 1} 次）。`;
-      }
-    }
-
-    const dateStr = new Date(lastExerciseSets.sessionDate).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' });
-
-    return (
-      <div style={{
-        backgroundColor: 'var(--surface-color)',
-        padding: '10px 14px',
-        borderRadius: '10px',
-        border: '1px dashed var(--primary-color)',
-        marginBottom: '16px',
-        fontSize: '12px',
-        lineHeight: 1.4
-      }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span style={{ fontWeight: 'bold', color: 'var(--primary-color)' }}>📈 上次表现 ({dateStr})</span>
-          <span style={{ opacity: 0.8 }}>最佳: <strong>{formatRecordedSet(bestSet, currentEx)}</strong></span>
-        </div>
-        <div style={{ marginTop: '4px', color: 'var(--success-color)', fontWeight: '500' }}>
-          建议：{suggestion}
-        </div>
-      </div>
-    );
-  };
-
   // 动作已完成组数展示
   const renderCurrentExerciseSets = () => {
     if (currentExSets.length === 0) return null;
@@ -695,10 +649,7 @@ export function WorkoutPage() {
         )}
       </div>
 
-      {/* 渐进性超负荷建议 */}
-      {renderOverloadSuggestion()}
-
-      {/* 【新功能 2】上周同组历史数据精确透视 (做第 N 组精准对标) */}
+      {/* 【核心数据】上周同组历史数据精确透视 (做第 N 组精准对标) */}
       {!isCardio && (
         <div style={{
           backgroundColor: 'rgba(59, 130, 246, 0.08)',
@@ -749,52 +700,30 @@ export function WorkoutPage() {
         )}
       </div>
 
-      {/* 力量训练辅助项：RPE 强度 & 组间休息时长选择 */}
+      {/* 力量训练辅助项：紧凑的组间休息时长选择 */}
       {!isCardio && (
-        <div style={{ backgroundColor: 'var(--surface-color)', padding: '12px', borderRadius: '10px', border: '1px solid var(--border-color)', marginBottom: '16px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', fontSize: '12px' }}>
-            <span style={{ opacity: 0.75 }}>主观负荷强度 (RPE):</span>
-            <span style={{ fontWeight: 'bold', color: 'var(--primary-color)' }}>
-              {rpe === 5 ? '≤ 5 (轻松/热身)' : `RPE ${rpe}`}
-            </span>
-          </div>
-          <div style={{ display: 'flex', gap: '6px', marginBottom: '12px' }}>
-            {[6, 7, 8, 9, 10].map(val => (
+        <div style={{
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          backgroundColor: 'var(--surface-color)', padding: '10px 14px', borderRadius: '10px',
+          border: '1px solid var(--border-color)', marginBottom: '16px', fontSize: '12px'
+        }}>
+          <span style={{ opacity: 0.75 }}>组间休息预设:</span>
+          <div style={{ display: 'flex', gap: '6px' }}>
+            {[60, 90, 120, 180].map(sec => (
               <button
-                key={val}
-                onClick={() => setRpe(val)}
+                key={sec}
+                onClick={() => setSelectedRestTime(sec)}
                 style={{
-                  flex: 1, padding: '6px 0', borderRadius: '6px',
-                  border: `1px solid ${rpe === val ? 'var(--primary-color)' : 'var(--border-color)'}`,
-                  background: rpe === val ? 'var(--primary-color)' : 'var(--bg-color)',
-                  color: rpe === val ? '#fff' : 'var(--text-color)',
-                  fontSize: '12px', fontWeight: 'bold', cursor: 'pointer'
+                  padding: '4px 10px', borderRadius: '6px', fontSize: '12px',
+                  border: `1px solid ${selectedRestTime === sec ? 'var(--success-color)' : 'var(--border-color)'}`,
+                  background: selectedRestTime === sec ? 'var(--success-color)' : 'transparent',
+                  color: selectedRestTime === sec ? '#fff' : 'var(--text-color)',
+                  cursor: 'pointer'
                 }}
               >
-                {val}
+                {sec}s
               </button>
             ))}
-          </div>
-
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12px' }}>
-            <span style={{ opacity: 0.75 }}>预设组间休息:</span>
-            <div style={{ display: 'flex', gap: '6px' }}>
-              {[60, 90, 120, 180].map(sec => (
-                <button
-                  key={sec}
-                  onClick={() => setSelectedRestTime(sec)}
-                  style={{
-                    padding: '4px 8px', borderRadius: '6px', fontSize: '11px',
-                    border: `1px solid ${selectedRestTime === sec ? 'var(--success-color)' : 'var(--border-color)'}`,
-                    background: selectedRestTime === sec ? 'var(--success-color)' : 'transparent',
-                    color: selectedRestTime === sec ? '#fff' : 'var(--text-color)',
-                    cursor: 'pointer'
-                  }}
-                >
-                  {sec}秒
-                </button>
-              ))}
-            </div>
           </div>
         </div>
       )}

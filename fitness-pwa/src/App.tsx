@@ -1,10 +1,9 @@
 import { lazy, Suspense } from 'react';
 import { HashRouter as Router, Routes, Route, NavLink } from 'react-router-dom';
-import { Dumbbell, ClipboardList, Utensils, User } from 'lucide-react';
+import { Dumbbell, ClipboardList, User } from 'lucide-react';
 
 const WorkoutPage = lazy(() => import('./pages/WorkoutPage').then(module => ({ default: module.WorkoutPage })));
 const PlansPage = lazy(() => import('./pages/PlansPage').then(module => ({ default: module.PlansPage })));
-const NutritionPage = lazy(() => import('./pages/NutritionPage').then(module => ({ default: module.NutritionPage })));
 const ProfilePage = lazy(() => import('./pages/ProfilePage').then(module => ({ default: module.ProfilePage })));
 
 function App() {
@@ -20,13 +19,12 @@ function App() {
           <Routes>
             <Route path="/" element={<WorkoutPage />} />
             <Route path="/plans" element={<PlansPage />} />
-            <Route path="/nutrition" element={<NutritionPage />} />
             <Route path="/profile" element={<ProfilePage />} />
           </Routes>
         </Suspense>
       </div>
 
-      {/* 底部导航栏 */}
+      {/* 底部导航栏 (极简三大核心功能) */}
       <nav style={{
         position: 'fixed',
         bottom: 0,
@@ -57,14 +55,6 @@ function App() {
         })}>
           <ClipboardList size={24} style={{ marginBottom: '4px' }} />
           <span>计划</span>
-        </NavLink>
-        <NavLink to="/nutrition" style={({isActive}) => ({
-          display: 'flex', flexDirection: 'column', alignItems: 'center', fontSize: '12px',
-          color: isActive ? 'var(--primary-color)' : 'var(--text-color)',
-          opacity: isActive ? 1 : 0.6
-        })}>
-          <Utensils size={24} style={{ marginBottom: '4px' }} />
-          <span>饮食</span>
         </NavLink>
         <NavLink to="/profile" style={({isActive}) => ({
           display: 'flex', flexDirection: 'column', alignItems: 'center', fontSize: '12px',
