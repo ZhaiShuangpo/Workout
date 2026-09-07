@@ -47,6 +47,11 @@ test('动作整体达标：完成4组10次或6组8次或超量完成均判定为
   // 场景 3: 完成 3 组 12 次（总次数 36 次 >= 目标最低 24 次）
   const sets3x12: WorkoutSet[] = [1, 2, 3].map(num => ({ ...baseSet, setNumber: num, reps: 12, setKind: 'working' }));
   assert.equal(exerciseMeetsPlan(sets3x12, plan, exercise), true);
+
+  // 场景 4: 计划设置了目标重量 50kg，用户完成 4 组 12 次（重量仅 20kg），依然判定达标（目标重量不作硬性阻断）
+  const planWithWeight: PlannedExercise = { ...plan, targetWeight: 50, targetSets: 4, minReps: 12, maxReps: 12 };
+  const sets4x12Light: WorkoutSet[] = [1, 2, 3, 4].map(num => ({ ...baseSet, setNumber: num, weight: 20, reps: 12, setKind: 'working' }));
+  assert.equal(exerciseMeetsPlan(sets4x12Light, planWithWeight, exercise), true);
 });
 
 test('配速格式使用秒级精度', () => {

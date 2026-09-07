@@ -83,9 +83,7 @@ export function setMeetsPlan(set: WorkoutSet, plan: PlannedExercise, exercise: E
   if (set.setKind === 'warmup') return false;
   const mode = exercise?.recordingMode || (exercise?.type === 'cardio' ? 'distance_time' : 'weight_reps');
   if (mode === 'weight_reps' || mode === 'bodyweight_reps') {
-    const repsOk = set.reps >= plan.minReps;
-    const weightOk = plan.targetWeight === undefined || set.weight >= plan.targetWeight;
-    return repsOk && weightOk;
+    return set.reps >= plan.minReps;
   }
   if (mode === 'timed_hold') return getDurationSeconds(set) >= (plan.targetDurationSeconds || 0);
   if (mode === 'distance_time' || mode === 'swim') {
@@ -125,10 +123,7 @@ export function exerciseMeetsPlan(
   // 条件 2: 实际完成的总训练量（次数/总时长/总距离）达到或超过计划预定总量
   if (mode === 'weight_reps' || mode === 'bodyweight_reps') {
     const totalPlannedReps = plan.targetSets * plan.minReps;
-    const totalActualReps = exSets.reduce((sum, s) => {
-      if (plan.targetWeight !== undefined && s.weight < plan.targetWeight) return sum;
-      return sum + Math.max(0, s.reps);
-    }, 0);
+    const totalActualReps = exSets.reduce((sum, s) => sum + Math.max(0, s.reps), 0);
     if (totalActualReps >= totalPlannedReps) return true;
   }
 
