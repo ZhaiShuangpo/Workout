@@ -80,9 +80,29 @@ export interface WorkoutSet {
   loadType?: Exercise['loadType'];
 }
 
-export function exerciseDefaults(exercise: Pick<Exercise, 'name' | 'muscleGroup' | 'type'>): Partial<Exercise> {
-  const { name, muscleGroup, type } = exercise;
-  const muscleParts = muscleGroup.split('/');
+export function isCardioExercise(exercise: Pick<Exercise, 'name' | 'muscleGroup' | 'type' | 'recordingMode'> | undefined): boolean {
+  if (!exercise) return false;
+  if (exercise.type === 'cardio') return true;
+  if (exercise.muscleGroup?.includes('有氧')) return true;
+  if (['distance_time', 'time_level', 'swim', 'interval'].includes(exercise.recordingMode || '')) return true;
+  const cardioKeywords = ['跑步', '慢跑', '散步', '走步', '单车', '骑行', '椭圆机', '划船机', '爬楼机', '跳绳', '游泳', '开合跳', '波比跳', '健步走'];
+  return cardioKeywords.some(k => exercise.name?.includes(k));
+}
+
+export function isTimedHoldExercise(exercise: Pick<Exercise, 'name' | 'muscleGroup' | 'type' | 'recordingMode'> | undefined): boolean {
+  if (!exercise) return false;
+  if (isCardioExercise(exercise)) return false;
+  if (exercise.recordingMode === 'timed_hold') return true;
+  const timedKeywords = ['平板支撑', '支撑', '静蹲', '靠墙静蹲', '悬垂', '铁板桥', '倒立', '保持', '拉伸'];
+  return timedKeywords.some(k => exercise.name?.includes(k));
+}
+
+export function exerciseDefaults(exercise: Pick<Exercise, 'name' | 'muscleGroup' | 'type' | 'recordingMode'>): Partial<Exercise> {
+  const { name, muscleGroup } = exercise;
+  const isCardio = isCardioExercise(exercise);
+  const isTimedHold = isTimedHoldExercise(exercise);
+  const effectiveType: 'cardio' | 'strength' = isCardio ? 'cardio' : 'strength';
+  const muscleParts = (muscleGroup || '全身').split('/');
   const fixedMachineNames = ['蝴蝶机', '腿举', '腿屈伸', '腿弯举', '坐姿划船'];
   const cardioEquipment: Record<string, string> = {
     跑步机跑步: '跑步机',
@@ -94,13 +114,14 @@ export function exerciseDefaults(exercise: Pick<Exercise, 'name' | 'muscleGroup'
     游泳: '泳池'
   };
   const base: Partial<Exercise> = {
+    type: effectiveType,
     primaryMuscles: [muscleParts[0]],
     secondaryMuscles: muscleParts.slice(1),
     weightInputMode: 'total',
     implementCount: 1,
     bodyweightFactor: 1,
-    countInVolume: type !== 'cardio',
-    equipment: type === 'cardio'
+    countInVolume: !isCardio && !isTimedHold,
+    equipment: isCardio
       ? cardioEquipment[name] || '有氧器械'
       : name.includes('哑铃')
         ? '哑铃'
@@ -111,19 +132,31 @@ export function exerciseDefaults(exercise: Pick<Exercise, 'name' | 'muscleGroup'
             : fixedMachineNames.some(keyword => name.includes(keyword))
               ? '固定器械'
               : '自重/通用',
-    movementPattern: name.includes('卧推') || name.includes('俯卧撑') ? '水平推' : name.includes('划船') ? '水平拉' : name.includes('引体') || name.includes('下拉') ? '垂直拉' : name.includes('推举') ? '垂直推' : name.includes('深蹲') || name.includes('腿举') ? '蹲' : name.includes('硬拉') || name.includes('臀推') ? '髋主导' : type === 'cardio' ? '有氧' : muscleParts[0]
+    movementPattern: name.includes('卧推') || name.includes('俯卧撑') ? '水平推' : name.includes('划船') ? '水平拉' : name.includes('引体') || name.includes('下拉') ? '垂直拉' : name.includes('推举') ? '垂直推' : name.includes('深蹲') || name.includes('腿举') ? '蹲' : name.includes('硬拉') || name.includes('臀推') ? '髋主导' : isCardio ? '有氧' : muscleParts[0]
   };
-  if (type === 'cardio') {
-    if (name === '游泳') return { ...base, recordingMode: 'swim', countInVolume: false };
-    if (name === '椭圆机' || name === '爬楼机') return { ...base, recordingMode: 'time_level', countInVolume: false };
-    return { ...base, recordingMode: 'distance_time', countInVolume: false };
+
+  if (isCardio) {
+    if (name.includes('游泳')) return { ...base, recordingMode: 'swim', countInVolume: false, supports1RM: false };
+    if (name.includes('椭圆机') || name.includes('爬楼机')) return { ...base, recordingMode: 'time_level', countInVolume: false, supports1RM: false };
+    return { ...base, recordingMode: 'distance_time', countInVolume: false, supports1RM: false };
   }
-  if (name === '平板支撑') return { ...base, recordingMode: 'timed_hold', loadType: 'bodyweight-added', countInVolume: false, supports1RM: false };
-  if (['卷腹', '悬垂举腿', '俄罗斯转体'].includes(name)) {
+
+  if (isTimedHold) {
+    return {
+      ...base,
+      recordingMode: 'timed_hold',
+      loadType: 'bodyweight-added',
+      countInVolume: false,
+      supports1RM: false
+    };
+  }
+
+  if (['卷腹', '悬垂举腿', '俄罗斯转体'].some(k => name.includes(k))) {
     return { ...base, recordingMode: 'bodyweight_reps', loadType: 'bodyweight-added', countInVolume: false, supports1RM: false };
   }
-  if (name === '俯卧撑') return { ...base, recordingMode: 'bodyweight_reps', loadType: 'bodyweight-added', bodyweightFactor: 0.65, supports1RM: false };
-  if (name === '引体向上') return { ...base, recordingMode: 'bodyweight_reps', loadType: 'bodyweight-added', supports1RM: true };
+  if (name.includes('俯卧撑')) return { ...base, recordingMode: 'bodyweight_reps', loadType: 'bodyweight-added', bodyweightFactor: 0.65, supports1RM: false };
+  if (name.includes('引体向上')) return { ...base, recordingMode: 'bodyweight_reps', loadType: 'bodyweight-added', supports1RM: true };
+
   const isDumbbell = name.includes('哑铃') && name !== '过头臂屈伸';
   return {
     ...base,
@@ -357,13 +390,26 @@ export async function initDB() {
       });
     }
   }
-  
-  if (missingExercises.length > 0) {
-    await db.exercises.bulkAdd(missingExercises);
+
+  // 确保已有自定义动作（如“跑步”或“平板支撑”）也能自动纠正为正确的 recordingMode 和 type
+  for (const ex of currentExercises) {
+    if (ex.isCustom && !exercisesToUpdate.some(u => u.id === ex.id)) {
+      const isCardio = isCardioExercise(ex);
+      const isTimed = isTimedHoldExercise(ex);
+      if (isCardio && (ex.type !== 'cardio' || !['distance_time', 'swim', 'time_level'].includes(ex.recordingMode || ''))) {
+        exercisesToUpdate.push({ ...ex, ...exerciseDefaults(ex), type: 'cardio' });
+      } else if (isTimed && ex.recordingMode !== 'timed_hold') {
+        exercisesToUpdate.push({ ...ex, ...exerciseDefaults(ex), recordingMode: 'timed_hold' });
+      }
+    }
   }
-  if (exercisesToUpdate.length > 0) {
-    await db.exercises.bulkPut(exercisesToUpdate);
-  }
+    
+    if (missingExercises.length > 0) {
+      await db.exercises.bulkAdd(missingExercises);
+    }
+    if (exercisesToUpdate.length > 0) {
+      await db.exercises.bulkPut(exercisesToUpdate);
+    }
 
   if (!await db.userProfiles.get('current')) {
     let savedProfile: Partial<UserProfile> = {};

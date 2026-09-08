@@ -165,17 +165,15 @@ export function PlansPage() {
       alert('请输入不重复的动作名称');
       return;
     }
-    const isCardio = customMuscle === '有氧心肺';
     const seed = {
       name: customName.trim(),
       muscleGroup: customMuscle.trim() || '胸部',
-      description: '自定义动作',
-      type: isCardio ? 'cardio' : 'strength'
+      description: '自定义动作'
     } as Exercise;
+    const defaults = exerciseDefaults(seed);
     await db.exercises.add({
       ...seed,
-      ...exerciseDefaults(seed),
-      recordingMode: isCardio ? 'distance_time' : 'weight_reps',
+      ...defaults,
       isCustom: true
     });
     setCustomName('');
@@ -454,7 +452,10 @@ export function PlansPage() {
                               <PlanNumber label="最低次数" value={plan.minReps} onChange={value => updatePlan(ex.id!, { minReps: value })} />
                               <PlanNumber label="最高次数" value={plan.maxReps} onChange={value => updatePlan(ex.id!, { maxReps: value })} />
                             </>}
-                            {(mode === 'timed_hold' || mode === 'distance_time' || mode === 'time_level' || mode === 'swim') && (
+                            {mode === 'timed_hold' && (
+                              <PlanNumber label="目标秒数" value={plan.targetDurationSeconds || 60} min={5} step={5} onChange={value => updatePlan(ex.id!, { targetDurationSeconds: value })} />
+                            )}
+                            {(mode === 'distance_time' || mode === 'time_level' || mode === 'swim') && (
                               <PlanNumber label="目标分钟" value={Math.round((plan.targetDurationSeconds || 0) / 60)} min={0} onChange={value => updatePlan(ex.id!, { targetDurationSeconds: value * 60 })} />
                             )}
                             {mode === 'distance_time' && (

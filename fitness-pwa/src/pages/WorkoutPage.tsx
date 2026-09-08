@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { db, type WorkoutSession, type WorkoutSet } from '../db';
+import { db, isCardioExercise, isTimedHoldExercise, type WorkoutSession, type WorkoutSet } from '../db';
 import {
   estimatedOneRepMax,
   exerciseMeetsPlan,
@@ -29,13 +29,15 @@ import {
 } from 'lucide-react';
 
 export function WorkoutPage() {
-  const allExercises = useLiveQuery(() => db.exercises.toArray()) || [];
+  const allExercisesQuery = useLiveQuery(() => db.exercises.toArray());
+  const allExercises = useMemo(() => allExercisesQuery || [], [allExercisesQuery]);
   const [selectedExId, setSelectedExId] = useState<number>(() => Number(localStorage.getItem('workout_selectedExId')) || 0);
   const [weight, setWeight] = useState<number>(() => Number(localStorage.getItem('workout_weight')) || 20); // 默认空杆 20kg
   const [reps, setReps] = useState<number>(() => Number(localStorage.getItem('workout_reps')) || 8);
   const [duration, setDuration] = useState<number>(() => Number(localStorage.getItem('workout_duration')) || 20); // 默认20分钟
   const [distance, setDistance] = useState<number>(() => Number(localStorage.getItem('workout_distance')) || 3.0); // 默认3.0km
-  const [rpe, setRpe] = useState<number>(() => Number(localStorage.getItem('workout_rpe')) || 8);
+  const [holdSeconds, setHoldSeconds] = useState<number>(() => Number(localStorage.getItem('workout_holdSeconds')) || 60); // 默认60秒 (用于平板支撑等时长类动作)
+  const [rpe, setRpe] = useState<number>(8); // 默认为 8，不再强制静默继承历史 9
   const [selectedRestTime, setSelectedRestTime] = useState<number>(() => Number(localStorage.getItem('workout_selectedRestTime')) || 90);
   
   // 组间休息倒计时状态
@@ -57,7 +59,7 @@ export function WorkoutPage() {
   useEffect(() => { localStorage.setItem('workout_reps', String(reps)); }, [reps]);
   useEffect(() => { localStorage.setItem('workout_duration', String(duration)); }, [duration]);
   useEffect(() => { localStorage.setItem('workout_distance', String(distance)); }, [distance]);
-  useEffect(() => { localStorage.setItem('workout_rpe', String(rpe)); }, [rpe]);
+  useEffect(() => { localStorage.setItem('workout_holdSeconds', String(holdSeconds)); }, [holdSeconds]);
   useEffect(() => { localStorage.setItem('workout_selectedRestTime', String(selectedRestTime)); }, [selectedRestTime]);
   useEffect(() => { localStorage.setItem('workout_restEndTime', String(restEndTime)); }, [restEndTime]);
 
@@ -241,11 +243,17 @@ export function WorkoutPage() {
 
     const exSets = currentSets?.filter(s => s.exerciseId === selectedExId) || [];
     const setNumber = Math.max(0, ...exSets.map(s => s.setNumber || 0)) + 1;
-    const isCardio = currentEx.type === 'cardio';
+    const isCardio = isCardioExercise(currentEx);
+    const isTimedHold = isTimedHoldExercise(currentEx);
 
     if (isCardio) {
       if (duration <= 0) {
         alert('请填写有效的运动时长');
+        return;
+      }
+    } else if (isTimedHold) {
+      if (holdSeconds <= 0) {
+        alert('请填写有效的保持时长（秒）');
         return;
       }
     } else {
@@ -260,15 +268,18 @@ export function WorkoutPage() {
       exerciseId: selectedExId,
       setNumber,
       weight: isCardio ? 0 : weight,
-      reps: isCardio ? 0 : reps,
-      duration: isCardio ? duration : undefined,
+      reps: isCardio ? 0 : isTimedHold ? 1 : reps,
+      duration: isCardio ? duration : isTimedHold ? Math.round((holdSeconds / 60) * 10) / 10 : undefined,
       distance: isCardio ? distance : undefined,
-      durationSeconds: isCardio ? duration * 60 : undefined,
+      durationSeconds: isCardio ? duration * 60 : isTimedHold ? holdSeconds : undefined,
       distanceMeters: isCardio ? Math.round(distance * 1000) : undefined,
       setKind: isWarmup ? 'warmup' : 'working',
-      rpe,
+      rpe: isCardio ? undefined : rpe,
       completed: true
     });
+
+    // 记录保存后 RPE 恢复为默认 8，避免无意带到后续组
+    setRpe(8);
 
     // 自动开启休息倒计时
     if (!isCardio && selectedRestTime > 0) {
@@ -322,12 +333,17 @@ export function WorkoutPage() {
     : allExercises;
 
   const currentEx = selectedBaseExercise;
-  const isCardio = currentEx?.type === 'cardio';
+  const isCardio = isCardioExercise(currentEx);
+  const isTimedHold = isTimedHoldExercise(currentEx);
   const currentPlan = sessionTemplate?.exercises?.find(item => item.exerciseId === selectedExId);
 
   const currentPlanText = currentPlan ? (() => {
     if (isCardio) {
-      return `目标 ${((currentPlan.targetDistanceMeters || 0) / 1000).toFixed(1)} km / ${Math.round((currentPlan.targetDurationSeconds || 0) / 60)} 分钟`;
+      const distStr = (currentPlan.targetDistanceMeters || 0) > 0 ? `${((currentPlan.targetDistanceMeters || 0) / 1000).toFixed(1)} km / ` : '';
+      return `目标 ${distStr}${Math.round((currentPlan.targetDurationSeconds || 0) / 60)} 分钟`;
+    }
+    if (isTimedHold) {
+      return `目标 ${currentPlan.targetSets} 组 × ${currentPlan.targetDurationSeconds || 60} 秒`;
     }
     return `目标 ${currentPlan.targetSets} 组 × ${currentPlan.minReps}-${currentPlan.maxReps} 次 @ RPE ${currentPlan.targetRpe || 8}`;
   })() : '';
@@ -349,15 +365,39 @@ export function WorkoutPage() {
   const applyLastPerformance = () => {
     const last = lastExerciseSets?.sets.toSorted((a, b) => a.setNumber - b.setNumber).at(-1);
     if (!last) return;
-    if (!isCardio) {
+    if (isTimedHold) {
+      setWeight(last.weight || 0);
+      setHoldSeconds(getDurationSeconds(last) || 60);
+    } else if (!isCardio) {
       setWeight(last.weight);
       setReps(last.reps);
     } else {
       const seconds = getDurationSeconds(last);
-      setDuration(Math.floor(seconds / 60));
+      setDuration(Math.floor(seconds / 60) || 20);
       setDistance(getDistanceMeters(last) / 1000);
     }
-    if (last.rpe) setRpe(last.rpe);
+  };
+
+  // 切换动作时的统一处理逻辑：智能校准动作默认参数与 RPE
+  const handleSelectExercise = (id: number) => {
+    setSelectedExId(id);
+    const ex = allExercises.find(e => e.id === id);
+    const plan = sessionTemplate?.exercises?.find(item => item.exerciseId === id);
+    if (plan?.restSeconds) {
+      setSelectedRestTime(plan.restSeconds);
+    }
+    // 切换动作，RPE 默认恢复为 8
+    setRpe(8);
+    // 智能校准动作默认值：自重或时长动作不携带杠铃默认重量
+    if (ex && isTimedHoldExercise(ex)) {
+      setWeight(0);
+      setHoldSeconds(plan?.targetDurationSeconds || 60);
+    } else if (ex?.loadType === 'bodyweight' || ex?.loadType === 'bodyweight-added') {
+      setWeight(0);
+      if (plan?.minReps) setReps(plan.minReps);
+    } else if (plan?.minReps) {
+      setReps(plan.minReps);
+    }
   };
 
   // 自动选中第一个动作
@@ -571,12 +611,7 @@ export function WorkoutPage() {
 
         <select 
           value={selectedExId} 
-          onChange={(e) => {
-            const id = Number(e.target.value);
-            setSelectedExId(id);
-            const plan = sessionTemplate?.exercises?.find(item => item.exerciseId === id);
-            if (plan?.restSeconds) setSelectedRestTime(plan.restSeconds);
-          }}
+          onChange={(e) => handleSelectExercise(Number(e.target.value))}
           style={{ 
             width: '100%', padding: '12px', fontSize: '16px', fontWeight: '500',
             borderRadius: '10px', border: '1px solid var(--border-color)',
@@ -665,7 +700,7 @@ export function WorkoutPage() {
           <span><strong>第 {currentSetNum} 组准备</strong></span>
           <span style={{ color: 'var(--primary-color)', fontWeight: 'bold' }}>
             {lastSameSet 
-              ? `🎯 上次第 ${currentSetNum} 组: ${lastSameSet.weight}kg × ${lastSameSet.reps}次${lastSameSet.rpe ? ` @ RPE ${lastSameSet.rpe}` : ''}`
+              ? `🎯 上次第 ${currentSetNum} 组: ${formatRecordedSet(lastSameSet, currentEx)}`
               : `🎯 首次挑战第 ${currentSetNum} 组`}
           </span>
         </div>
@@ -673,7 +708,29 @@ export function WorkoutPage() {
 
       {/* 核心指标录入区 (极简、专注) */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '12px', marginBottom: '14px' }}>
-        {!isCardio ? (
+        {isCardio ? (
+          <>
+            <MetricControl label="运动时长" value={duration} step={5} suffix="分钟" onChange={setDuration} />
+            <MetricControl label="运动距离" value={distance} step={0.5} suffix="km" onChange={setDistance} />
+          </>
+        ) : isTimedHold ? (
+          <>
+            <MetricControl 
+              label="负重" 
+              value={weight} 
+              step={2.5} 
+              suffix="kg" 
+              onChange={setWeight} 
+            />
+            <MetricControl 
+              label="时长" 
+              value={holdSeconds} 
+              step={5} 
+              suffix="秒" 
+              onChange={setHoldSeconds} 
+            />
+          </>
+        ) : (
           <>
             <MetricControl 
               label="重量" 
@@ -692,38 +749,56 @@ export function WorkoutPage() {
             />
             <MetricControl label="次数" value={reps} step={1} suffix="次" onChange={setReps} />
           </>
-        ) : (
-          <>
-            <MetricControl label="运动时长" value={duration} step={5} suffix="分钟" onChange={setDuration} />
-            <MetricControl label="运动距离" value={distance} step={0.5} suffix="km" onChange={setDistance} />
-          </>
         )}
       </div>
 
-      {/* 力量训练辅助项：紧凑的组间休息时长选择 */}
+      {/* 力量/时长训练辅助项：紧凑的 RPE 下拉选择 + 组间休息预设 */}
       {!isCardio && (
         <div style={{
           display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-          backgroundColor: 'var(--surface-color)', padding: '10px 14px', borderRadius: '10px',
+          backgroundColor: 'var(--surface-color)', padding: '8px 12px', borderRadius: '10px',
           border: '1px solid var(--border-color)', marginBottom: '16px', fontSize: '12px'
         }}>
-          <span style={{ opacity: 0.75 }}>组间休息预设:</span>
-          <div style={{ display: 'flex', gap: '6px' }}>
-            {[60, 90, 120, 180].map(sec => (
-              <button
-                key={sec}
-                onClick={() => setSelectedRestTime(sec)}
-                style={{
-                  padding: '4px 10px', borderRadius: '6px', fontSize: '12px',
-                  border: `1px solid ${selectedRestTime === sec ? 'var(--success-color)' : 'var(--border-color)'}`,
-                  background: selectedRestTime === sec ? 'var(--success-color)' : 'transparent',
-                  color: selectedRestTime === sec ? '#fff' : 'var(--text-color)',
-                  cursor: 'pointer'
-                }}
-              >
-                {sec}s
-              </button>
-            ))}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <span style={{ opacity: 0.75 }}>RPE强度:</span>
+            <select
+              aria-label="RPE强度"
+              value={rpe}
+              onChange={e => setRpe(Number(e.target.value))}
+              style={{
+                padding: '4px 8px', borderRadius: '6px', fontSize: '12px',
+                border: '1px solid var(--border-color)', backgroundColor: 'var(--bg-color)',
+                color: 'var(--text-color)', fontWeight: 'bold', cursor: 'pointer', outline: 'none'
+              }}
+            >
+              {[6, 7, 8, 9, 10].map(val => (
+                <option key={val} value={val}>
+                  {val === 8 ? '8 (标准)' : val === 9 ? '9 (吃力)' : val === 10 ? '10 (极限)' : `${val}`}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <span style={{ opacity: 0.75 }}>休息:</span>
+            <div style={{ display: 'flex', gap: '4px' }}>
+              {[60, 90, 120, 180].map(sec => (
+                <button
+                  key={sec}
+                  type="button"
+                  onClick={() => setSelectedRestTime(sec)}
+                  style={{
+                    padding: '3px 8px', borderRadius: '6px', fontSize: '11px',
+                    border: `1px solid ${selectedRestTime === sec ? 'var(--success-color)' : 'var(--border-color)'}`,
+                    background: selectedRestTime === sec ? 'var(--success-color)' : 'transparent',
+                    color: selectedRestTime === sec ? '#fff' : 'var(--text-color)',
+                    cursor: 'pointer'
+                  }}
+                >
+                  {sec}s
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       )}

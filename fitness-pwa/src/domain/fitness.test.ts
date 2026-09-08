@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { allocateWholePortions, calculateBarbellPlates, effectiveLoad, estimatedOneRepMax, formatPace, nutritionTargets, setMeetsPlan, exerciseMeetsPlan, setVolume } from './fitness.ts';
-import type { Exercise, PlannedExercise, UserProfile, WorkoutSet } from '../db.ts';
+import { allocateWholePortions, calculateBarbellPlates, effectiveLoad, estimatedOneRepMax, formatPace, formatRecordedSet, nutritionTargets, setMeetsPlan, exerciseMeetsPlan, setVolume } from './fitness.ts';
+import { isCardioExercise, isTimedHoldExercise, exerciseDefaults, type Exercise, type PlannedExercise, type UserProfile, type WorkoutSet } from '../db.ts';
 
 const baseSet: WorkoutSet = { sessionId: 1, exerciseId: 1, setNumber: 1, weight: 20, reps: 10, completed: true };
 
@@ -85,5 +85,53 @@ test('杠铃片速算器准确计算单侧挂片', () => {
   const calc20 = calculateBarbellPlates(20, 20);
   assert.equal(calc20.perSideWeight, 0);
   assert.equal(calc20.plates.length, 0);
+});
+
+test('智能识别有氧运动与静态时长保持动作', () => {
+  assert.equal(isCardioExercise({ name: '跑步', muscleGroup: '腿部' }), true);
+  assert.equal(isCardioExercise({ name: '户外慢跑', muscleGroup: '全身' }), true);
+  assert.equal(isCardioExercise({ name: '动感单车', muscleGroup: '有氧心肺' }), true);
+  assert.equal(isCardioExercise({ name: '游泳', muscleGroup: '有氧心肺' }), true);
+  assert.equal(isCardioExercise({ name: '杠铃卧推', muscleGroup: '胸部' }), false);
+
+  assert.equal(isTimedHoldExercise({ name: '平板支撑', muscleGroup: '核心' }), true);
+  assert.equal(isTimedHoldExercise({ name: '靠墙静蹲', muscleGroup: '腿部' }), true);
+  assert.equal(isTimedHoldExercise({ name: '单杠悬垂', muscleGroup: '背部' }), true);
+  assert.equal(isTimedHoldExercise({ name: '跑步', muscleGroup: '有氧心肺' }), false);
+});
+
+test('时长类动作（平板支撑）达标与格式化验证', () => {
+  const plankEx: Exercise = {
+    name: '平板支撑',
+    muscleGroup: '核心',
+    description: '',
+    recordingMode: 'timed_hold',
+    ...exerciseDefaults({ name: '平板支撑', muscleGroup: '核心' })
+  };
+  const plankPlan: PlannedExercise = {
+    exerciseId: 1,
+    order: 0,
+    targetSets: 3,
+    minReps: 1,
+    maxReps: 1,
+    restSeconds: 60,
+    targetDurationSeconds: 60
+  };
+
+  // 1组60秒平板支撑，格式化为 "1:00 · 自重"
+  const set1: WorkoutSet = {
+    ...baseSet,
+    exerciseId: 1,
+    weight: 0,
+    reps: 1,
+    durationSeconds: 60,
+    setKind: 'working'
+  };
+  assert.equal(formatRecordedSet(set1, plankEx), '1:00 · 自重');
+  assert.equal(setMeetsPlan(set1, plankPlan, plankEx), true);
+
+  // 完成3组60秒 -> 动作达标
+  const sets3 = [1, 2, 3].map(setNumber => ({ ...set1, setNumber }));
+  assert.equal(exerciseMeetsPlan(sets3, plankPlan, plankEx), true);
 });
 
