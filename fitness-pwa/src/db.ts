@@ -467,8 +467,9 @@ export async function initDB() {
       }
     }
 
-    // 全量动作校验：确保所有动作（含自定义动作与历史遗留动作）的 recordingMode 与 type 100% 准确
+    // 全量动作校验：确保所有系统预设动作（含历史遗留动作）的 recordingMode 与 type 100% 准确
     for (const ex of currentExercises) {
+      if (ex.isCustom) continue; // 自定义动作由用户显式配置与编辑，保留用户的个性化设置
       if (exercisesToUpdate.some(u => u.id === ex.id)) continue;
       const isCardio = isCardioExercise(ex);
       const isTimed = isTimedHoldExercise(ex);

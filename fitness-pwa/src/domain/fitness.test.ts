@@ -229,5 +229,42 @@ test('历史训练组与计划清洗逻辑：悬垂举腿误存为时长时自�
   assert.equal(repairedSet.duration, undefined);
 });
 
+test('自定义动作创建与编辑：支持更新部位、模式与器械且默认值匹配', () => {
+  const customSeed: Partial<Exercise> = {
+    name: '墙壁倒立静止',
+    muscleGroup: '肩部',
+    recordingMode: 'timed_hold',
+    equipment: '自重/通用',
+    description: '背靠墙壁静态倒立',
+    note: '手距与肩同宽',
+    isCustom: true
+  };
+
+  const initialDefaults = exerciseDefaults(customSeed as Exercise);
+  const createdExercise: Exercise = {
+    id: 999,
+    ...initialDefaults,
+    ...customSeed
+  } as Exercise;
+
+  assert.equal(createdExercise.recordingMode, 'timed_hold');
+  assert.equal(createdExercise.isCustom, true);
+  assert.equal(isTimedHoldExercise(createdExercise), true);
+
+  const updatedExercise: Exercise = {
+    ...createdExercise,
+    name: '手倒立支撑',
+    muscleGroup: '核心',
+    note: '离墙20cm'
+  };
+
+  assert.equal(updatedExercise.id, 999);
+  assert.equal(updatedExercise.name, '手倒立支撑');
+  assert.equal(updatedExercise.muscleGroup, '核心');
+  assert.equal(updatedExercise.note, '离墙20cm');
+  assert.equal(updatedExercise.recordingMode, 'timed_hold');
+  assert.equal(isTimedHoldExercise(updatedExercise), true);
+});
+
 
 

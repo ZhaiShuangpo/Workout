@@ -1,8 +1,9 @@
 import { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { db, exerciseDefaults, type Exercise, type PlannedExercise, type WorkoutTemplate } from '../db';
+import { db, type Exercise, type PlannedExercise, type WorkoutTemplate } from '../db';
 import { TechniqueCueModal } from '../components/TechniqueCueModal';
+import { CustomExerciseModal } from '../components/CustomExerciseModal';
 import { Plus, Check, Dumbbell, Calendar as CalendarIcon, Edit2, Trash2, Copy, ArrowUp, ArrowDown, Play, Info } from 'lucide-react';
 
 const WEEK_DAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
@@ -39,10 +40,9 @@ export function PlansPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [viewCueExercise, setViewCueExercise] = useState<Exercise | null>(null);
 
-  // 自定义动作表单状态
-  const [isAddingExercise, setIsAddingExercise] = useState(false);
-  const [customName, setCustomName] = useState('');
-  const [customMuscle, setCustomMuscle] = useState('胸部');
+  // 自定义动作弹窗状态（支持新增与编辑）
+  const [customModalOpen, setCustomModalOpen] = useState(false);
+  const [editingCustomExercise, setEditingCustomExercise] = useState<Exercise | null>(null);
 
   const allExercisesQuery = useLiveQuery(() => db.exercises.toArray());
   const exercises = useMemo(() => allExercisesQuery || [], [allExercisesQuery]);
@@ -158,26 +158,6 @@ export function PlansPage() {
 
   const handleDuplicateTemplate = async (tpl: WorkoutTemplate) => {
     await db.workoutTemplates.add({ ...tpl, id: undefined, name: `${tpl.name}（副本）` });
-  };
-
-  const handleAddExercise = async () => {
-    if (!customName.trim() || exercises.some(exercise => exercise.name === customName.trim())) {
-      alert('请输入不重复的动作名称');
-      return;
-    }
-    const seed = {
-      name: customName.trim(),
-      muscleGroup: customMuscle.trim() || '胸部',
-      description: '自定义动作'
-    } as Exercise;
-    const defaults = exerciseDefaults(seed);
-    await db.exercises.add({
-      ...seed,
-      ...defaults,
-      isCustom: true
-    });
-    setCustomName('');
-    setIsAddingExercise(false);
   };
 
   const toggleDaySelection = (dayIndex: number) => {
@@ -442,6 +422,24 @@ export function PlansPage() {
                             >
                               <Info size={13} /> 要领
                             </button>
+                            {ex.isCustom && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setEditingCustomExercise(ex);
+                                  setCustomModalOpen(true);
+                                }}
+                                style={{
+                                  marginLeft: '4px', background: 'none', border: 'none',
+                                  color: isSelected ? '#fff' : 'var(--primary-color)',
+                                  cursor: 'pointer', padding: '0 4px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '2px', opacity: 0.9
+                                }}
+                                title="编辑自定义动作"
+                              >
+                                <Edit2 size={12} /> 编辑
+                              </button>
+                            )}
                           </div>
                           {isSelected && <Check size={18} />}
                         </div>
@@ -537,42 +535,21 @@ export function PlansPage() {
             </div>
           </div>
 
-          <button onClick={() => setIsAddingExercise(value => !value)} style={{ width: '100%', padding: '12px', borderRadius: '10px', border: '2px dashed var(--primary-color)', background: 'transparent', color: 'var(--primary-color)', fontWeight: 'bold', cursor: 'pointer' }}>
-            <Plus size={17} style={{ verticalAlign: 'middle' }} /> 自定义动作
+          <button
+            type="button"
+            onClick={() => {
+              setEditingCustomExercise(null);
+              setCustomModalOpen(true);
+            }}
+            style={{
+              width: '100%', padding: '12px', borderRadius: '10px',
+              border: '2px dashed var(--primary-color)', background: 'transparent',
+              color: 'var(--primary-color)', fontWeight: 'bold', cursor: 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px'
+            }}
+          >
+            <Plus size={18} /> 自定义动作
           </button>
-          {isAddingExercise && (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '8px', padding: '12px', background: 'var(--surface-color)', borderRadius: '10px' }}>
-              <input
-                placeholder="动作名称 (如: 上斜哑铃卧推)"
-                value={customName}
-                onChange={event => setCustomName(event.target.value)}
-                style={libraryInputStyle}
-              />
-              <select
-                value={customMuscle}
-                onChange={event => setCustomMuscle(event.target.value)}
-                style={libraryInputStyle}
-              >
-                {['胸部', '背部', '腿部', '肩部', '手臂', '核心', '有氧心肺', '全身'].map(m => (
-                  <option key={m} value={m}>{m}</option>
-                ))}
-              </select>
-              <button
-                type="button"
-                onClick={() => setIsAddingExercise(false)}
-                style={{ padding: '10px', border: 'none', borderRadius: '7px', cursor: 'pointer', background: 'var(--border-color)', color: 'var(--text-color)' }}
-              >
-                取消
-              </button>
-              <button
-                type="button"
-                onClick={handleAddExercise}
-                style={{ padding: '10px', border: 'none', borderRadius: '7px', background: 'var(--primary-color)', color: '#fff', fontWeight: 'bold', cursor: 'pointer' }}
-              >
-                保存动作
-              </button>
-            </div>
-          )}
           {filteredLibraryExercises.map((ex) => (
             <div key={ex.id} style={{
               padding: '16px',
@@ -604,9 +581,37 @@ export function PlansPage() {
               <p style={{ margin: 0, fontSize: '13px', color: 'var(--text-color)', opacity: 0.8 }}>
                 {ex.description}
               </p>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '8px', fontSize: '11px', opacity: 0.65 }}>
-                <span>{ex.equipment || '通用'} · {ex.movementPattern || ex.recordingMode}</span>
-                {ex.isCustom && <button aria-label={`删除${ex.name}`} onClick={() => confirm('删除自定义动作会让已有历史显示为未知动作，确定继续吗？') && db.exercises.delete(ex.id!)} style={{ border: 'none', background: 'none', color: 'var(--danger-color)', cursor: 'pointer' }}><Trash2 size={14} /></button>}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px', fontSize: '11px' }}>
+                <span style={{ opacity: 0.65 }}>{ex.equipment || '通用'} · {ex.movementPattern || ex.recordingMode}</span>
+                {ex.isCustom && (
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                    <button
+                      aria-label={`编辑${ex.name}`}
+                      onClick={() => {
+                        setEditingCustomExercise(ex);
+                        setCustomModalOpen(true);
+                      }}
+                      style={{
+                        border: 'none', background: 'rgba(37, 99, 235, 0.08)', color: 'var(--primary-color)',
+                        cursor: 'pointer', padding: '3px 8px', borderRadius: '5px',
+                        display: 'flex', alignItems: 'center', gap: '3px', fontSize: '12px', fontWeight: 'bold'
+                      }}
+                    >
+                      <Edit2 size={12} /> 编辑
+                    </button>
+                    <button
+                      aria-label={`删除${ex.name}`}
+                      onClick={() => confirm('删除自定义动作会让已有历史显示为未知动作，确定继续吗？') && db.exercises.delete(ex.id!)}
+                      style={{
+                        border: 'none', background: 'none', color: 'var(--danger-color)',
+                        cursor: 'pointer', padding: '3px', display: 'flex', alignItems: 'center'
+                      }}
+                      title="删除动作"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           ))}
@@ -617,19 +622,21 @@ export function PlansPage() {
       {viewCueExercise && (
         <TechniqueCueModal exercise={viewCueExercise} onClose={() => setViewCueExercise(null)} />
       )}
+
+      {/* 自定义动作编辑与新增弹窗 */}
+      <CustomExerciseModal
+        isOpen={customModalOpen}
+        exercise={editingCustomExercise}
+        onClose={() => {
+          setCustomModalOpen(false);
+          setEditingCustomExercise(null);
+        }}
+      />
     </div>
   );
 }
 
-const libraryInputStyle = {
-  minWidth: 0,
-  width: '100%',
-  padding: '9px',
-  borderRadius: '7px',
-  border: '1px solid var(--border-color)',
-  background: 'var(--bg-color)',
-  color: 'var(--text-color)'
-};
+
 
 function PlanNumber({ label, value, onChange, min = 1, step = 1 }: { label: string; value: number; onChange: (value: number) => void; min?: number; step?: number }) {
   return (
