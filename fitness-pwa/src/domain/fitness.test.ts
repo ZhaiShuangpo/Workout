@@ -92,12 +92,74 @@ test('智能识别有氧运动与静态时长保持动作', () => {
   assert.equal(isCardioExercise({ name: '户外慢跑', muscleGroup: '全身' }), true);
   assert.equal(isCardioExercise({ name: '动感单车', muscleGroup: '有氧心肺' }), true);
   assert.equal(isCardioExercise({ name: '游泳', muscleGroup: '有氧心肺' }), true);
+  assert.equal(isCardioExercise({ name: '跳绳', muscleGroup: '有氧心肺' }), true);
+  assert.equal(isCardioExercise({ name: '战绳', muscleGroup: '有氧心肺' }), true);
+  assert.equal(isCardioExercise({ name: '波比跳', muscleGroup: '全身/核心' }), false);
   assert.equal(isCardioExercise({ name: '杠铃卧推', muscleGroup: '胸部' }), false);
 
+  // 纯静态时长保持（计时）动作
   assert.equal(isTimedHoldExercise({ name: '平板支撑', muscleGroup: '核心' }), true);
+  assert.equal(isTimedHoldExercise({ name: '侧平板支撑', muscleGroup: '核心' }), true);
   assert.equal(isTimedHoldExercise({ name: '靠墙静蹲', muscleGroup: '腿部' }), true);
+  assert.equal(isTimedHoldExercise({ name: '静态悬垂 (死挂)', muscleGroup: '背部/肩部' }), true);
   assert.equal(isTimedHoldExercise({ name: '单杠悬垂', muscleGroup: '背部' }), true);
   assert.equal(isTimedHoldExercise({ name: '跑步', muscleGroup: '有氧心肺' }), false);
+
+  // 计数动作（绝不能被判定为计时）
+  assert.equal(isTimedHoldExercise({ name: '悬垂举腿', muscleGroup: '核心' }), false);
+  assert.equal(isTimedHoldExercise({ name: '悬垂提膝', muscleGroup: '核心' }), false);
+  assert.equal(isTimedHoldExercise({ name: '卷腹', muscleGroup: '核心' }), false);
+  assert.equal(isTimedHoldExercise({ name: '俄罗斯转体', muscleGroup: '核心' }), false);
+  assert.equal(isTimedHoldExercise({ name: '健腹轮', muscleGroup: '核心' }), false);
+  assert.equal(isTimedHoldExercise({ name: '死虫式', muscleGroup: '核心' }), false);
+  assert.equal(isTimedHoldExercise({ name: '双杠臂屈伸 (Dips)', muscleGroup: '胸部/三头' }), false);
+  assert.equal(isTimedHoldExercise({ name: '波比跳', muscleGroup: '全身/核心' }), false);
+});
+
+test('悬垂举腿与经典力量动作默认配置为计数', () => {
+  const hangingLegRaiseDef = exerciseDefaults({ name: '悬垂举腿', muscleGroup: '核心' });
+  assert.equal(hangingLegRaiseDef.recordingMode, 'bodyweight_reps');
+  assert.equal(hangingLegRaiseDef.type, 'strength');
+  assert.equal(hangingLegRaiseDef.loadType, 'bodyweight-added');
+
+  const dipsDef = exerciseDefaults({ name: '双杠臂屈伸 (Dips)', muscleGroup: '胸部/三头' });
+  assert.equal(dipsDef.recordingMode, 'bodyweight_reps');
+  assert.equal(dipsDef.type, 'strength');
+
+  const abWheelDef = exerciseDefaults({ name: '健腹轮', muscleGroup: '核心' });
+  assert.equal(abWheelDef.recordingMode, 'bodyweight_reps');
+  assert.equal(abWheelDef.type, 'strength');
+
+  const deadHangDef = exerciseDefaults({ name: '静态悬垂 (死挂)', muscleGroup: '背部/肩部' });
+  assert.equal(deadHangDef.recordingMode, 'timed_hold');
+  assert.equal(deadHangDef.type, 'strength');
+});
+
+test('悬垂举腿等计数动作格式化为“重量/自重 × 次数”', () => {
+  const hangingLegRaiseEx: Exercise = {
+    name: '悬垂举腿',
+    muscleGroup: '核心',
+    description: '',
+    ...exerciseDefaults({ name: '悬垂举腿', muscleGroup: '核心' })
+  };
+
+  const set1: WorkoutSet = {
+    ...baseSet,
+    exerciseId: 1,
+    weight: 0,
+    reps: 12,
+    setKind: 'working'
+  };
+  assert.equal(formatRecordedSet(set1, hangingLegRaiseEx), '自重 × 12次');
+
+  const setWeighted: WorkoutSet = {
+    ...baseSet,
+    exerciseId: 1,
+    weight: 5,
+    reps: 10,
+    setKind: 'working'
+  };
+  assert.equal(formatRecordedSet(setWeighted, hangingLegRaiseEx), '自重 + 5 kg × 10次');
 });
 
 test('时长类动作（平板支撑）达标与格式化验证', () => {
@@ -134,4 +196,38 @@ test('时长类动作（平板支撑）达标与格式化验证', () => {
   const sets3 = [1, 2, 3].map(setNumber => ({ ...set1, setNumber }));
   assert.equal(exerciseMeetsPlan(sets3, plankPlan, plankEx), true);
 });
+
+test('历史训练组与计划清洗逻辑：悬垂举腿误存为时长时自动恢复为有效次数并清除秒数', () => {
+  // 模拟以前因分类错误将悬垂举腿记录为时长组的情况
+  const legacyHangingLegRaiseSet: WorkoutSet = {
+    sessionId: 10,
+    exerciseId: 100,
+    setNumber: 1,
+    weight: 0,
+    reps: 1,
+    durationSeconds: 12, // 用户在输入框实际上写了 12 次
+    duration: 0.2,
+    completed: true
+  };
+
+  // 清洗逻辑
+  const repairedSet = { ...legacyHangingLegRaiseSet };
+  if (repairedSet.durationSeconds !== undefined) {
+    if (repairedSet.reps <= 1) {
+      if (repairedSet.durationSeconds >= 2 && repairedSet.durationSeconds <= 35) {
+        repairedSet.reps = repairedSet.durationSeconds;
+      } else {
+        repairedSet.reps = 12;
+      }
+    }
+    delete repairedSet.durationSeconds;
+    delete repairedSet.duration;
+  }
+
+  assert.equal(repairedSet.reps, 12);
+  assert.equal(repairedSet.durationSeconds, undefined);
+  assert.equal(repairedSet.duration, undefined);
+});
+
+
 
