@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { allocateWholePortions, calculateBarbellPlates, effectiveLoad, estimatedOneRepMax, formatPace, formatRecordedSet, nutritionTargets, setMeetsPlan, exerciseMeetsPlan, setVolume } from './fitness.ts';
-import { isCardioExercise, isTimedHoldExercise, exerciseDefaults, type Exercise, type PlannedExercise, type UserProfile, type WorkoutSet } from '../db.ts';
+import { allocateWholePortions, calculateBarbellPlates, effectiveLoad, estimatedOneRepMax, formatPace, formatRecordedSet, groupSessionSetsByExercise, nutritionTargets, setMeetsPlan, exerciseMeetsPlan, setVolume } from './fitness.ts';
+import { isCardioExercise, isTimedHoldExercise, exerciseDefaults, type Exercise, type PlannedExercise, type UserProfile, type WorkoutSet, type WorkoutTemplate } from '../db.ts';
 
 const baseSet: WorkoutSet = { sessionId: 1, exerciseId: 1, setNumber: 1, weight: 20, reps: 10, completed: true };
 
@@ -264,6 +264,92 @@ test('自定义动作创建与编辑：支持更新部位、模式与器械且�
   assert.equal(updatedExercise.note, '离墙20cm');
   assert.equal(updatedExercise.recordingMode, 'timed_hold');
   assert.equal(isTimedHoldExercise(updatedExercise), true);
+});
+
+test('训练历史记录中动作顺序：关联计划模板时严格遵循计划 order 顺序，杜绝数字ID键升序错乱', () => {
+  // 模拟计划：用户设定的动作执行顺序为：
+  // 1. 动作 ID 50 (引体向上, order 0)
+  // 2. 动作 ID 12 (卧推, order 1)
+  // 3. 动作 ID 99 (深蹲, order 2)
+  const template: WorkoutTemplate = {
+    id: 1,
+    name: '全身力量计划',
+    exerciseIds: [50, 12, 99],
+    exercises: [
+      { exerciseId: 50, order: 0, targetSets: 4, minReps: 8, maxReps: 10, restSeconds: 90 },
+      { exerciseId: 12, order: 1, targetSets: 4, minReps: 8, maxReps: 10, restSeconds: 90 },
+      { exerciseId: 99, order: 2, targetSets: 4, minReps: 8, maxReps: 10, restSeconds: 90 }
+    ]
+  };
+
+  // 用户按顺序执行了这 3 个动作，每个动作做了 2 组
+  const sessionSets: WorkoutSet[] = [
+    { id: 1, sessionId: 101, exerciseId: 50, setNumber: 1, weight: 0, reps: 10, completed: true },
+    { id: 2, sessionId: 101, exerciseId: 50, setNumber: 2, weight: 0, reps: 9, completed: true },
+    { id: 3, sessionId: 101, exerciseId: 12, setNumber: 1, weight: 60, reps: 10, completed: true },
+    { id: 4, sessionId: 101, exerciseId: 12, setNumber: 2, weight: 60, reps: 10, completed: true },
+    { id: 5, sessionId: 101, exerciseId: 99, setNumber: 1, weight: 80, reps: 8, completed: true },
+    { id: 6, sessionId: 101, exerciseId: 99, setNumber: 2, weight: 80, reps: 8, completed: true }
+  ];
+
+  // 如果按旧的 Object.entries(groupedSets)，因为 JS 对象对数字键强制按升序遍历，
+  // 会错误地变成 [12, 50, 99]，使卧推排在引体向上前面！
+  const groups = groupSessionSetsByExercise(sessionSets, template);
+
+  assert.equal(groups.length, 3);
+  assert.equal(groups[0].exerciseId, 50); // 第1个：引体向上 (ID 50)
+  assert.equal(groups[1].exerciseId, 12); // 第2个：卧推 (ID 12)
+  assert.equal(groups[2].exerciseId, 99); // 第3个：深蹲 (ID 99)
+
+  // 内部组数保持 setNumber 升序
+  assert.deepEqual(groups[0].sets.map(s => s.setNumber), [1, 2]);
+  assert.deepEqual(groups[1].sets.map(s => s.setNumber), [1, 2]);
+  assert.deepEqual(groups[2].sets.map(s => s.setNumber), [1, 2]);
+});
+
+test('训练历史记录中动作顺序：自由训练（无模板）严格按照实际打卡执行顺序排列', () => {
+  // 自由训练场景，用户先做 ID 30，再做 ID 5，最后做 ID 18
+  const freeWorkoutSets: WorkoutSet[] = [
+    { id: 10, sessionId: 202, exerciseId: 30, setNumber: 1, weight: 20, reps: 12, completed: true },
+    { id: 11, sessionId: 202, exerciseId: 30, setNumber: 2, weight: 20, reps: 12, completed: true },
+    { id: 12, sessionId: 202, exerciseId: 5, setNumber: 1, weight: 15, reps: 10, completed: true },
+    { id: 13, sessionId: 202, exerciseId: 18, setNumber: 1, weight: 40, reps: 8, completed: true }
+  ];
+
+  const groups = groupSessionSetsByExercise(freeWorkoutSets, undefined);
+
+  assert.equal(groups.length, 3);
+  assert.equal(groups[0].exerciseId, 30);
+  assert.equal(groups[1].exerciseId, 5);
+  assert.equal(groups[2].exerciseId, 18);
+});
+
+test('训练历史记录中动作顺序：包含临时加练的计划外动作时，计划动作按计划在前，加练动作按执行顺序在后', () => {
+  const template: WorkoutTemplate = {
+    id: 2,
+    name: '上肢日',
+    exerciseIds: [20, 10],
+    exercises: [
+      { exerciseId: 20, order: 0, targetSets: 3, minReps: 10, maxReps: 12, restSeconds: 60 },
+      { exerciseId: 10, order: 1, targetSets: 3, minReps: 10, maxReps: 12, restSeconds: 60 }
+    ]
+  };
+
+  // 用户按计划做了 20 和 10，之后临时加练了动作 1 和动作 99
+  const setsWithBonus: WorkoutSet[] = [
+    { id: 1, sessionId: 303, exerciseId: 20, setNumber: 1, weight: 30, reps: 10, completed: true },
+    { id: 2, sessionId: 303, exerciseId: 10, setNumber: 1, weight: 40, reps: 10, completed: true },
+    { id: 3, sessionId: 303, exerciseId: 1, setNumber: 1, weight: 10, reps: 15, completed: true },
+    { id: 4, sessionId: 303, exerciseId: 99, setNumber: 1, weight: 5, reps: 20, completed: true }
+  ];
+
+  const groups = groupSessionSetsByExercise(setsWithBonus, template);
+
+  assert.equal(groups.length, 4);
+  assert.equal(groups[0].exerciseId, 20); // 计划动作 1
+  assert.equal(groups[1].exerciseId, 10); // 计划动作 2
+  assert.equal(groups[2].exerciseId, 1);  // 临时加练 1
+  assert.equal(groups[3].exerciseId, 99); // 临时加练 2
 });
 
 

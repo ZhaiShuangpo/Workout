@@ -1,4 +1,4 @@
-import type { Exercise, PlannedExercise, WorkoutSet, UserProfile } from '../db';
+import type { Exercise, PlannedExercise, WorkoutSet, WorkoutTemplate, UserProfile } from '../db';
 
 export function effectiveLoad(set: WorkoutSet, exercise: Exercise | undefined, bodyWeight: number) {
   const entered = Math.max(0, Number(set.weight) || 0);
@@ -550,5 +550,73 @@ export function getExerciseCues(exercise?: { name: string; techniqueCues?: strin
     return [exercise.description.trim()];
   }
   return ['保持核心刚性收紧，动作全幅度受控完成，顶峰稍作停顿，配合平稳呼吸。'];
+}
+
+export interface OrderedExerciseGroup {
+  exerciseId: number;
+  sets: WorkoutSet[];
+}
+
+/**
+ * 将单次训练记录的各组数据按动作进行分组，并严格保持合理的展示顺序：
+ * 1. 若关联了训练模板计划，严格按照计划中各动作的 order 顺序展示；
+ * 2. 计划外临时追加的动作，排在计划动作之后，且保持其实际执行先后顺序；
+ * 3. 若为自由训练（无模板），则 100% 保持用户实际做组执行的先后顺序；
+ * 彻底避免因为 JS 普通对象对数字键自动升序排序导致的乱序问题。
+ */
+export function groupSessionSetsByExercise(
+  sessionSets: WorkoutSet[],
+  template?: WorkoutTemplate | null
+): OrderedExerciseGroup[] {
+  if (!sessionSets || sessionSets.length === 0) return [];
+
+  // 1. 获取模板中定义的动作执行顺序映射
+  const plannedOrderMap = new Map<number, number>();
+  if (template?.exercises && template.exercises.length > 0) {
+    [...template.exercises].sort((a, b) => a.order - b.order).forEach((item, idx) => {
+      plannedOrderMap.set(item.exerciseId, idx);
+    });
+  } else if (template?.exerciseIds && template.exerciseIds.length > 0) {
+    template.exerciseIds.forEach((id, idx) => {
+      plannedOrderMap.set(id, idx);
+    });
+  }
+
+  // 2. 将做组记录按主键升序排列，保留做组录入的先后时间线
+  const sortedSets = [...sessionSets].sort((a, b) => (a.id ?? 0) - (b.id ?? 0));
+
+  // 3. 提取动作分组，保持其在训练中的首次出现顺序
+  const groupMap = new Map<number, OrderedExerciseGroup>();
+  const orderedGroups: OrderedExerciseGroup[] = [];
+
+  for (const set of sortedSets) {
+    let group = groupMap.get(set.exerciseId);
+    if (!group) {
+      group = { exerciseId: set.exerciseId, sets: [] };
+      groupMap.set(set.exerciseId, group);
+      orderedGroups.push(group);
+    }
+    group.sets.push(set);
+  }
+
+  // 4. 每个动作内部的各组数据按 setNumber / id 升序排列
+  for (const group of orderedGroups) {
+    group.sets.sort((a, b) => (a.setNumber ?? 0) - (b.setNumber ?? 0) || (a.id ?? 0) - (b.id ?? 0));
+  }
+
+  // 5. 排序策略：
+  // 若关联了模板计划，优先按计划中动作的 order 排列；
+  // 计划外的临时增补动作，排在计划之后并保持其实际执行先后顺序；
+  // 若无关联模板（自由训练），则 100% 保持用户实际执行该动作的先后次序。
+  if (plannedOrderMap.size > 0) {
+    orderedGroups.sort((a, b) => {
+      const orderA = plannedOrderMap.has(a.exerciseId) ? plannedOrderMap.get(a.exerciseId)! : 9999;
+      const orderB = plannedOrderMap.has(b.exerciseId) ? plannedOrderMap.get(b.exerciseId)! : 9999;
+      if (orderA !== orderB) return orderA - orderB;
+      return 0;
+    });
+  }
+
+  return orderedGroups;
 }
 

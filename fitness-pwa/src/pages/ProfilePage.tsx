@@ -1,7 +1,7 @@
 import { useMemo, useState, useEffect } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, type WorkoutSession, type WorkoutSet, type WorkoutTemplate, type Exercise } from '../db';
-import { estimatedOneRepMax, formatRecordedSet, SET_KIND_LABELS, setVolume } from '../domain/fitness';
+import { estimatedOneRepMax, formatRecordedSet, groupSessionSetsByExercise, SET_KIND_LABELS, setVolume } from '../domain/fitness';
 import { downloadBackup, restoreBackup } from '../domain/backup';
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { Activity, Calendar, Zap, Trash2, ChevronDown, ChevronUp, TrendingUp, Flame, Scale, Download, Upload, Moon, Sun } from 'lucide-react';
@@ -9,10 +9,11 @@ import { Activity, Calendar, Zap, Trash2, ChevronDown, ChevronUp, TrendingUp, Fl
 function SessionCard({ session, sets, templates, exercises, bodyWeight }: { session: WorkoutSession, sets: WorkoutSet[], templates: WorkoutTemplate[], exercises: Exercise[], bodyWeight: number }) {
   const [isExpanded, setIsExpanded] = useState(false);
 
-  // 获取模板名称
-  const templateName = session.templateId 
-    ? templates?.find(t => t.id === session.templateId)?.name || '未知计划'
-    : '自由训练';
+  // 获取模板与模板名称
+  const template = session.templateId 
+    ? templates?.find(t => t.id === session.templateId)
+    : undefined;
+  const templateName = template?.name || (session.templateId ? '未知计划' : '自由训练');
   
   // 获取相关组数计算该次训练的总容量（排除有氧运动）
   const sessionSets = sets?.filter(s => s.sessionId === session.id) || [];
@@ -22,12 +23,8 @@ function SessionCard({ session, sets, templates, exercises, bodyWeight }: { sess
     return total + setVolume(set, exercise, session.bodyWeight ?? bodyWeight);
   }, 0);
 
-  // 按动作分组
-  const groupedSets = sessionSets.reduce((acc, set) => {
-    if (!acc[set.exerciseId]) acc[set.exerciseId] = [];
-    acc[set.exerciseId].push(set);
-    return acc;
-  }, {} as Record<number, WorkoutSet[]>);
+  // 按计划模板顺序及实际做组时间分组，彻底避免 JS 对象数字键自动重排序导致的乱序
+  const orderedExerciseGroups = groupSessionSetsByExercise(sessionSets, template);
 
   // 格式化时长
   let durationStr = '进行中';
@@ -92,12 +89,12 @@ function SessionCard({ session, sets, templates, exercises, bodyWeight }: { sess
 
       {isExpanded && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '8px' }}>
-          {Object.entries(groupedSets).map(([exId, setsArray]) => {
-            const exercise = exercises.find(e => e.id === Number(exId));
+          {orderedExerciseGroups.map(({ exerciseId, sets: setsArray }) => {
+            const exercise = exercises.find(e => e.id === exerciseId);
             const exName = exercise?.name || '未知动作';
             const isCardio = exercise?.type === 'cardio';
             return (
-              <div key={exId} style={{ backgroundColor: 'var(--bg-color)', padding: '12px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+              <div key={exerciseId} style={{ backgroundColor: 'var(--bg-color)', padding: '12px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
                 <div style={{ fontWeight: 'bold', fontSize: '14px', marginBottom: '8px', color: 'var(--primary-color)' }}>{exName}</div>
                 {setsArray.map((set, idx) => (
                   <div key={set.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', opacity: 0.8, padding: '4px 0', borderBottom: idx === setsArray.length - 1 ? 'none' : '1px solid var(--border-color)' }}>
